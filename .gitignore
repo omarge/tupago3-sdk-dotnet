@@ -1,0 +1,10 @@
+bin/
+obj/
+*.user
+.vs/
+[Dd]ebug/
+[Rr]elease/
+*.nupkg
+*.snupkg
+packages/
+TestResults/

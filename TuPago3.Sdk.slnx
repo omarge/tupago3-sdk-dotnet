@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/TuPago3.Sdk/TuPago3.Sdk.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TuPago3.Sdk.Tests/TuPago3.Sdk.Tests.csproj" />
+  </Folder>
+</Solution>

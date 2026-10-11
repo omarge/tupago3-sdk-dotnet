@@ -1,0 +1,71 @@
+name: ci
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-pack:
+    name: Build, Test, Pack & Consumer
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore TuPago3.Sdk.slnx
+
+      - name: Build
+        run: dotnet build TuPago3.Sdk.slnx -c Release --no-restore
+
+      - name: Test
+        run: dotnet test TuPago3.Sdk.slnx -c Release --no-build --logger "trx;LogFileName=test-results.trx" --results-directory ./TestResults
+
+      - name: Pack SDK
+        run: dotnet pack src/TuPago3.Sdk/TuPago3.Sdk.csproj -c Release --no-build -o ./artifacts
+
+      - name: Publish SDK package to feed
+        run: dotnet nuget push "./artifacts/*.nupkg" --source ./artifacts --skip-duplicate || true
+
+      - name: Build & run external consumer (local feed only)
+        run: |
+          set -euo pipefail
+          CONSUMER=../tupago3-sdk-dotnet-consumer
+          if [ -d "$CONSUMER" ]; then
+            cp -r ./artifacts "$CONSUMER/local-feed"
+            (cd "$CONSUMER" && dotnet run -c Release)
+          else
+            echo "consumer project not present; skipping"
+          fi
+
+      - name: Secret scan
+        run: |
+          set -euo pipefail
+          # Fail the build if any high-entropy base64 secret-like token is committed.
+          if grep -rInE 'TUPAGO_JWT_BASE64_SECRET=[A-Za-z0-9+/=]{40,}' --include='*.cs' --include='*.csproj' --include='*.json' --include='*.env' --include='*.txt' . ; then
+            echo "::error::Possible JWT secret committed"; exit 1
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: ./TestResults
+
+      - name: Upload package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-package
+          path: ./artifacts/*.nupkg
