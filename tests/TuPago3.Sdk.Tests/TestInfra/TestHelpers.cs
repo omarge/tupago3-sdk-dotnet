@@ -8,7 +8,7 @@ public static class TestSecrets
 {
     // Synthetic dev secret for the in-process simulated server (NOT a production credential).
     public const string SimSecretBase64 =
-        "MzM0ODYwZjI2MzFlNWE3NjAwNzZmZDViYWVjM2MyNDY1Y2JkYmVhMzA5ZTY0YzZjMTE2NTFmMmRmNGEzY2Q2MmQ2OGYyMjk1OGQ5ZjEyMjkxODY3YWEyNWYzMWZkMWQ0ZWE1ZDU4OTdkMDUxNWY5ZjU2NTBmNzIzYTUxNmQ0YTM=";
+        "tB4ONNRTIY7eF7bnUpLIMnmmTt3z8Y9bee7P703pajm9G2vK+uLbmzWGkd+ojthKz/xMjjUqY/I5/7ZcB/dRNw==";
 
     // Dev backend3 JWT secret (lab only). Overridable via env; never a production credential.
     public static string BackendSecretBase64 =>
