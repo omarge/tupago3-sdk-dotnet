@@ -66,7 +66,10 @@ jobs:
   backend3-certification:
     name: Live backend3 certification gate
     runs-on: ubuntu-latest
-    # Only enforced when an isolated backend3 lab endpoint is reachable in the runner environment.
+    # Opt-in: only executes in an isolated runner wired to a backend3 lab (var TUPAGO_BACKEND3_LAB=1).
+    # When enabled, the gate FAILS if backend3 is unreachable or the reads do not succeed. In the
+    # general GitHub-hosted CI there is no backend3, so this job is skipped (not failed).
+    if: ${{ vars.TUPAGO_BACKEND3_LAB == '1' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
