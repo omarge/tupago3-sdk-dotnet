@@ -39,6 +39,8 @@ public sealed class SimulatedPaymentService : PaymentService.PaymentServiceBase
 
     public string LastReceivedIdempotencyKey { get; private set; } = "";
 
+    public List<string> ReceivedAuthorizations { get; } = new();
+
     private void CheckAuth(ServerCallContext context)
     {
         if (LabSecretBase64 is null) return;
@@ -47,6 +49,7 @@ public sealed class SimulatedPaymentService : PaymentService.PaymentServiceBase
         if (string.IsNullOrEmpty(header) || !header.StartsWith("Bearer "))
             throw new RpcException(new Status(StatusCode.Unauthenticated, "Missing bearer token"));
         var token = header["Bearer ".Length..];
+        lock (_gate) ReceivedAuthorizations.Add(token);
         if (!VerifyHs512(Convert.FromBase64String(LabSecretBase64), token))
             throw new RpcException(new Status(StatusCode.Unauthenticated, "Invalid token"));
         if (IsExpired(token))

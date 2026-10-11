@@ -38,6 +38,40 @@ public class T09_RemoteTlsRequired
             new TupagoPaymentClient(new TupagoClientOptions { Target = "grpc.tupago.example:443", UseTls = false }));
         Assert.Contains("TLS required", ex.Message);
     }
+
+    [Fact]
+    public void LoopbackByDnsResolutionStillPlaintextPermitted()
+    {
+        // "localhost" resolves to a loopback address; plaintext is permitted for it.
+        var ex = Record.Exception(() =>
+            new TupagoPaymentClient(new TupagoClientOptions { Target = "localhost:9090", UseTls = false }));
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void NonLoopbackLiteralIpRequiresTls()
+    {
+        Assert.True(TlsPolicy.IsLoopback("127.0.0.1"));
+        Assert.True(TlsPolicy.IsLoopback("::1"));
+        Assert.False(TlsPolicy.IsLoopback("10.0.0.5"));
+        Assert.False(TlsPolicy.IsLoopback("192.168.1.50"));
+        var ex = Assert.Throws<TupagoConfigException>(() =>
+            TlsPolicy.RequireTlsForTarget("10.0.0.5:9090", tlsEnabled: false));
+        Assert.Contains("TLS required", ex.Message);
+    }
+
+    [Fact]
+    public void NoInsecureHttpMessageHandlerInjectionPoint()
+    {
+        // G4: the public options must NOT expose any settable HttpMessageHandler/SocketsHttpHandler
+        // through which an insecure transport could be injected.
+        var props = typeof(TupagoClientOptions).GetProperties();
+        foreach (var p in props)
+        {
+            Assert.DoesNotContain(p.PropertyType.FullName ?? "",
+                new[] { "System.Net.Http.HttpMessageHandler", "System.Net.Http.SocketsHttpHandler" });
+        }
+    }
 }
 
 /// <summary>

@@ -2,12 +2,13 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
-namespace TuPago3.Sdk.Authentication;
+namespace TuPago3.Sdk.Tests.TestInfra;
 
 /// <summary>
-/// DEV/TEST ONLY helper to forge a synthetic HS512 JWT from a base64-encoded secret. Mirrors the
-/// backend3 lab interceptor (algorithm HS512, claims sub / userId / auth / iat / exp). This is NOT a
-/// production credential minting facility; never use against real financial systems.
+/// LAB-ONLY helper to forge a synthetic HS512 JWT from a base64-encoded secret. Lives in the test
+/// assembly ONLY and is NOT shipped in the distributed SDK package. Mirrors the backend3 lab
+/// interceptor (algorithm HS512, claims sub / userId / auth / iat / exp). This is NOT a production
+/// credential minting facility; never use against real financial systems.
 /// </summary>
 public static class JwtForge
 {

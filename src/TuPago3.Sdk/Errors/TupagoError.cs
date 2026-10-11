@@ -13,8 +13,9 @@ public static class TupagoMarkers
 
 /// <summary>
 /// Base typed error for every SDK failure. Preserves the originating gRPC status code and
-/// a safe (non-secret) description. Inspectable via <see cref="IsTupagoError"/>,
-/// <see cref="IsUnknownOutcome"/>, <see cref="IsPendingReconciliation"/> and <see cref="HasStatusCode"/>.
+/// a safe (non-secret) description. Inspectable via <see cref="TupagoErrorPredicates.IsTupagoError"/>,
+/// <see cref="TupagoErrorPredicates.IsUnknownOutcome"/>, <see cref="TupagoErrorPredicates.IsPendingReconciliation"/>
+/// and <see cref="TupagoErrorPredicates.HasStatusCode"/>.
 /// </summary>
 public class TupagoException : Exception
 {

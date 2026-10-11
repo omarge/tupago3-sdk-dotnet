@@ -31,27 +31,20 @@ jobs:
       - name: Test
         run: dotnet test TuPago3.Sdk.slnx -c Release --no-build --logger "trx;LogFileName=test-results.trx" --results-directory ./TestResults
 
-      - name: Pack SDK
+      - name: Pack SDK (generates the .nupkg consumed below)
         run: dotnet pack src/TuPago3.Sdk/TuPago3.Sdk.csproj -c Release --no-build -o ./artifacts
 
-      - name: Publish SDK package to feed
-        run: dotnet nuget push "./artifacts/*.nupkg" --source ./artifacts --skip-duplicate || true
-
-      - name: Build & run external consumer (local feed only)
+      - name: Build & run self-contained consumer from generated nupkg
         run: |
           set -euo pipefail
-          CONSUMER=../tupago3-sdk-dotnet-consumer
-          if [ -d "$CONSUMER" ]; then
-            cp -r ./artifacts "$CONSUMER/local-feed"
-            (cd "$CONSUMER" && dotnet run -c Release)
-          else
-            echo "consumer project not present; skipping"
-          fi
+          CONSUMER=examples/ConsumerCertification
+          echo "Installing TuPago3.Sdk strictly from the locally generated feed (./artifacts)..."
+          (cd "$CONSUMER" && dotnet run -c Release)
 
       - name: Secret scan
         run: |
           set -euo pipefail
-          # Fail the build if any high-entropy base64 secret-like token is committed.
+          # Fail the build if a JWT base64 secret is committed to source.
           if grep -rInE 'TUPAGO_JWT_BASE64_SECRET=[A-Za-z0-9+/=]{40,}' --include='*.cs' --include='*.csproj' --include='*.json' --include='*.env' --include='*.txt' . ; then
             echo "::error::Possible JWT secret committed"; exit 1
           fi
@@ -69,3 +62,27 @@ jobs:
         with:
           name: nuget-package
           path: ./artifacts/*.nupkg
+
+  backend3-certification:
+    name: Live backend3 certification gate
+    runs-on: ubuntu-latest
+    # Only enforced when an isolated backend3 lab endpoint is reachable in the runner environment.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore TuPago3.Sdk.slnx
+
+      - name: Build
+        run: dotnet build TuPago3.Sdk.slnx -c Release --no-restore
+
+      - name: Run certification gate (fails if backend3 is unreachable / reads fail)
+        env:
+          TUPAGO_BACKEND3_CERT: '1'
+        run: dotnet test TuPago3.Sdk.slnx -c Release --no-build --filter "FullyQualifiedName~T12c_Backend3CertificationGate"

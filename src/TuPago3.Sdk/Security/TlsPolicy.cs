@@ -18,13 +18,7 @@ public static class TlsPolicy
 {
     public static bool IsLoopback(string target)
     {
-        var host = target;
-        if (host.Contains(':'))
-        {
-            var idx = host.LastIndexOf(':');
-            host = host[..idx];
-        }
-        host = host.Trim().ToLowerInvariant();
+        var host = ExtractHost(target).Trim().ToLowerInvariant();
         switch (host)
         {
             case "localhost":
@@ -36,7 +30,54 @@ public static class TlsPolicy
         }
         if (IPAddress.TryParse(host, out var ip))
             return IPAddress.IsLoopback(ip);
-        return false;
+        // A hostname (not a literal IP) is only treated as loopback if it actually resolves to a
+        // loopback address. This closes the "remote host disguised as loopback" gap: a name that
+        // resolves to a non-loopback IP is NOT considered loopback and therefore requires TLS.
+        return ResolvesToLoopback(host);
+    }
+
+    /// <summary>
+    /// Extracts the host portion of a "host:port" target, tolerating IPv6 literals (with or without
+    /// brackets) and bare IP addresses. Never mistakes the colons of an IPv6 literal for a port separator.
+    /// </summary>
+    private static string ExtractHost(string target)
+    {
+        var t = (target ?? "").Trim();
+        if (t.StartsWith("["))
+        {
+            var close = t.IndexOf(']');
+            if (close > 0) return t.Substring(1, close - 1);
+        }
+        if (t.Contains(':'))
+        {
+            // Multiple colons => IPv6 literal (no bracket), treat the whole value as the host.
+            if (t.IndexOf(':') != t.LastIndexOf(':'))
+                return t;
+            var idx = t.LastIndexOf(':');
+            return t[..idx];
+        }
+        return t;
+    }
+
+    /// <summary>
+    /// Best-effort DNS resolution. Returns true ONLY when every resolved address is a loopback
+    /// address. Resolution failures are treated as non-loopback (fail-closed: require TLS) except
+    /// for the literal "localhost" convention handled above.
+    /// </summary>
+    private static bool ResolvesToLoopback(string host)
+    {
+        try
+        {
+            var addresses = Dns.GetHostAddresses(host);
+            if (addresses.Length == 0) return false;
+            foreach (var addr in addresses)
+                if (!IPAddress.IsLoopback(addr)) return false;
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     /// <summary>
