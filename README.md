@@ -6,6 +6,7 @@ SDK oficial .NET/C# para el **TuPago3 PaymentService**.
 - Transportes: **gRPC** (default), **REST** y **GraphQL**
 - Seguridad de transporte: TLS obligatorio para destinos remotos; plaintext solo para identidades locales explícitas
 - Inyección dinámica de JWT vía `ITokenProvider` (nunca almacenado en el canal)
+- **Auth fail-closed** por defecto (`AllowUnauthenticatedLab` requerido para omitir credenciales)
 - Retry acotado en lecturas; **creates con un solo intento / no-blind-retry**
 - Errores tipados: `TupagoUnknownOutcomeException`, `TupagoPendingReconciliationException`
 
@@ -43,22 +44,28 @@ await client.DisposeAsync();
 | Transporte | Estado | Notas |
 |------------|--------|-------|
 | gRPC | Completo | Transporte por defecto |
-| REST | Implementado | Rutas verificadas contra backend3 (`msjpagoqrusuario`, `estatusmsjqr`, etc.) |
-| GraphQL | Implementado | Operaciones ByCuenta + mutations; mapeo de `extensions.code` |
+| REST | Completo | Rutas verificadas contra backend3 |
+| GraphQL | Completo | Operaciones ByCuenta + mutations |
 
 Selecciona el transporte con `TupagoClientOptions.Transport`.
 
 ## Hardening aplicado
 
 - Terminología corregida (single-attempt / no-blind-retry)
-- Retry de lecturas reducido (solo Unavailable + DeadlineExceeded)
+- Retry de lecturas reducido
 - Sin límites comerciales inventados en Money
 - `CANCELLED` ya no se trata como resultado definido en creates
-- Auth fail-closed por defecto (requiere `AllowUnauthenticatedLab` para omitir credenciales)
+- Auth fail-closed por defecto
 - Token en blanco falla antes del dispatch
 - TLS loopback sin confianza DNS/TOCTOU
 - Validación de hostname más estricta
 - El SDK no dispone el `LoggerFactory` del caller
+
+## Tests
+
+- Seleccción de transporte y auth fail-closed (`T30`)
+- Shape de request REST (`T31`)
+- Tests de integración opt-in contra backend3 (`T12`, `T12c`)
 
 ## Licencia
 
