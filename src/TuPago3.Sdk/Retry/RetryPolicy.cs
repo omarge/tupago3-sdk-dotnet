@@ -5,7 +5,7 @@ namespace TuPago3.Sdk.Retry;
 
 /// <summary>
 /// Bounded, read-only retry with backoff. Create RPCs use <see cref="NoRetry"/>: they must never
-/// be retried automatically (financial invariant). Only transient read failures are retried.
+/// be retried automatically (financial invariant). Only clearly transient read failures are retried.
 /// </summary>
 public sealed class RetryPolicy
 {
@@ -24,13 +24,15 @@ public sealed class RetryPolicy
         MaxElapsed = TimeSpan.FromSeconds(1),
     };
 
+    /// <summary>
+    /// Conservative default: only UNAVAILABLE and DEADLINE_EXCEEDED are candidates for bounded retry.
+    /// RESOURCE_EXHAUSTED, INTERNAL and UNKNOWN are not blindly retried unless the server provides
+    /// explicit safe-retry semantics (e.g. RetryInfo) which are not currently parsed.
+    /// </summary>
     public static bool IsRetryableRead(StatusCode code) => code switch
     {
         StatusCode.Unavailable => true,
         StatusCode.DeadlineExceeded => true,
-        StatusCode.ResourceExhausted => true,
-        StatusCode.Internal => true,
-        StatusCode.Unknown => true,
         _ => false
     };
 

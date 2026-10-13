@@ -1,12 +1,13 @@
 using Grpc.Core;
 using Grpc.Core.Interceptors;
+using TuPago3.Sdk.Errors;
 
 namespace TuPago3.Sdk.Authentication;
 
 /// <summary>
-/// Per-RPC interceptor that injects `Authorization: Bearer &lt;token&gt;` from an
-/// <see cref="ITokenProvider"/>. The token is never written to any log. When no provider is set
-/// (loopback dev without auth) the call proceeds without the header.
+/// Per-RPC interceptor that injects `Authorization: Bearer <token>` from an
+/// <see cref="ITokenProvider"/>. The token is never written to any log.
+/// Blank or whitespace tokens fail closed before the call is dispatched.
 /// </summary>
 public sealed class BearerTokenInterceptor : Interceptor
 {
@@ -23,8 +24,10 @@ public sealed class BearerTokenInterceptor : Interceptor
             return continuation(request, context);
 
         // Token is fetched synchronously on the call path; providers are expected to be cheap
-        // (cached) so this does not block the async pipeline meaningfully.
+        // (cached). Prefer fully async in a future revision to avoid sync-over-async.
         var token = _provider.GetTokenAsync(context.Options.CancellationToken).GetAwaiter().GetResult();
+        if (string.IsNullOrWhiteSpace(token))
+            throw new TupagoConfigException("Credentials", "token provider returned a blank token");
 
         var headers = context.Options.Headers;
         if (headers is null)

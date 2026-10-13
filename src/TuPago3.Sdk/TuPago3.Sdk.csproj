@@ -11,7 +11,7 @@
     <Version>0.1.0</Version>
     <Authors>TuPago3</Authors>
     <Company>TuPago3</Company>
-    <Description>Official .NET/C# SDK for the TuPago3 PaymentService gRPC API. Transport-security-enforced, JWT-dynamic, exactly-once financial dispatch.</Description>
+    <Description>Official .NET/C# SDK for the TuPago3 PaymentService gRPC API. Transport-security-enforced, JWT-dynamic, single-attempt / no-blind-retry financial create.</Description>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
     <PackageProjectUrl>https://github.com/omarge/tupago3-sdk-dotnet</PackageProjectUrl>
     <RepositoryUrl>https://github.com/omarge/tupago3-sdk-dotnet</RepositoryUrl>

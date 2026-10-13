@@ -9,7 +9,8 @@ namespace TuPago3.Sdk.Security;
 /// Enforces the transport-security policy:
 /// <list type="bullet">
 ///   <item>Remote (non-loopback) targets REQUIRE TLS with certificate verification.</item>
-///   <item>Plaintext is permitted ONLY for loopback addresses (127.0.0.1, ::1, localhost).</item>
+///   <item>Plaintext is permitted ONLY for explicit local identities (localhost, 127.0.0.0/8, ::1).</item>
+///   <item>Arbitrary hostnames that currently resolve to loopback are NOT trusted (DNS/TOCTOU closed).</item>
 ///   <item>A consumer-supplied CA is supported for private PKI and is validated, never bypassed.</item>
 /// </list>
 /// There is no code path that disables certificate validation.
@@ -22,6 +23,7 @@ public static class TlsPolicy
         switch (host)
         {
             case "localhost":
+            case "localhost.localdomain":
             case "127.0.0.1":
             case "::1":
                 return true;
@@ -30,10 +32,9 @@ public static class TlsPolicy
         }
         if (IPAddress.TryParse(host, out var ip))
             return IPAddress.IsLoopback(ip);
-        // A hostname (not a literal IP) is only treated as loopback if it actually resolves to a
-        // loopback address. This closes the "remote host disguised as loopback" gap: a name that
-        // resolves to a non-loopback IP is NOT considered loopback and therefore requires TLS.
-        return ResolvesToLoopback(host);
+        // Arbitrary hostnames are never treated as loopback, even if they currently resolve to one.
+        // This closes the DNS/TOCTOU boundary.
+        return false;
     }
 
     /// <summary>
@@ -60,36 +61,15 @@ public static class TlsPolicy
     }
 
     /// <summary>
-    /// Best-effort DNS resolution. Returns true ONLY when every resolved address is a loopback
-    /// address. Resolution failures are treated as non-loopback (fail-closed: require TLS) except
-    /// for the literal "localhost" convention handled above.
-    /// </summary>
-    private static bool ResolvesToLoopback(string host)
-    {
-        try
-        {
-            var addresses = Dns.GetHostAddresses(host);
-            if (addresses.Length == 0) return false;
-            foreach (var addr in addresses)
-                if (!IPAddress.IsLoopback(addr)) return false;
-            return true;
-        }
-        catch (Exception)
-        {
-            return false;
-        }
-    }
-
-    /// <summary>
     /// Fail-closed guard: throws <see cref="TupagoConfigException"/> when a non-loopback target
-    /// is configured without TLS. Plaintext loopback is explicitly permitted.
+    /// is configured without TLS. Plaintext is only allowed for explicit local identities.
     /// </summary>
     public static void RequireTlsForTarget(string target, bool tlsEnabled)
     {
         if (!tlsEnabled && !TlsPolicy.IsLoopback(target))
         {
             throw new TupagoConfigException("Target",
-                $"TLS required for non-loopback target '{target}'; plaintext is only allowed for loopback (127.0.0.1, ::1, localhost)");
+                $"TLS required for non-loopback target '{target}'; plaintext is only allowed for explicit local identities (localhost, 127.0.0.0/8, ::1)");
         }
     }
 
@@ -97,6 +77,7 @@ public static class TlsPolicy
     /// Builds <see cref="SslClientAuthenticationOptions"/> that validates the server certificate
     /// against the supplied CA PEM (private PKI) and matches the expected server name against the
     /// certificate SAN. Validation is never disabled.
+    /// Note: hostname matching currently uses a custom path; platform-native verification is preferred long-term.
     /// </summary>
     public static SslClientAuthenticationOptions BuildSslOptions(string? caCertPem, string? expectedServerName)
     {
@@ -160,8 +141,20 @@ public static class TlsPolicy
                 if (eq < 0) continue;
                 var value = line[(eq + 1)..].Trim();
                 if (string.Equals(value, host, StringComparison.OrdinalIgnoreCase)) return true;
-                if (value.StartsWith("*.") && host.EndsWith(value[1..], StringComparison.OrdinalIgnoreCase)) return true;
+                // Wildcard: *.example.com matches foo.example.com but not a.b.example.com
+                if (value.StartsWith("*.", StringComparison.Ordinal))
+                {
+                    var suffix = value[1..]; // ".example.com"
+                    if (host.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var prefix = host[..^suffix.Length];
+                        if (prefix.Length > 0 && !prefix.Contains('.'))
+                            return true;
+                    }
+                }
             }
+            // When SAN exists, do not fall back to CN.
+            return false;
         }
 
         var cn = cert.GetNameInfo(X509NameType.DnsName, false);
