@@ -33,14 +33,27 @@ await client.DisposeAsync();
 
 ## ByCuenta en consultas de estatus
 
-Cuando el caller proporciona `idCuenta`, el SDK usa las rutas **ByCuenta** del backend:
+El backend3 ofrece dos formas de consultar el estatus de un pago:
 
-| Operación | Ruta REST (ByCuenta) | GraphQL |
-|------------|----------------------|---------|
-| GetQrStatus | `POST /api/payments/estatusmsjqr` | `pagoQrEstatusByCuenta` |
-| GetTelefonicoStatus | `POST /api/payments/estatusmsjcobrotelefonico` | `pagoTelefonicoEstatusByCuenta` |
+| Variante | Cuándo usarla | Qué envía el SDK |
+|----------|-----------------|-------------------|
+| **ByCuenta** | El caller conoce la cuenta | `idCuenta` explícito en el body |
+| **Usuario** | El backend resuelve la cuenta del JWT | Solo `idc` |
 
-Esto permite que el cliente indique explícitamente la cuenta, en lugar de dejar que el backend resuelva la cuenta del usuario autenticado.
+**Política del SDK:** si el request incluye `idCuenta` > 0, se usa **ByCuenta** automáticamente.
+
+```csharp
+// ByCuenta (recomendado)
+var status = await client.GetQrStatusAsync(new GetStatusRequest
+{
+    Idc = "abc123",
+    IdCuenta = 42,          // activa ByCuenta
+});
+
+// Rutas usadas:
+// REST:  POST /api/payments/estatusmsjqr
+// GraphQL: pagoQrEstatusByCuenta(idc, idCuenta)
+```
 
 ## Invariantes financieras
 
@@ -55,7 +68,7 @@ Esto permite que el cliente indique explícitamente la cuenta, en lugar de dejar
 | Transporte | Estado | Notas |
 |------------|--------|-------|
 | gRPC | Completo | Transporte por defecto |
-| REST | Completo | Rutas verificadas contra backend3; ByCuenta en status |
+| REST | Completo | ByCuenta en status cuando `idCuenta` está presente |
 | GraphQL | Completo | Operaciones ByCuenta + mutations |
 
 Selecciona el transporte con `TupagoClientOptions.Transport`.
