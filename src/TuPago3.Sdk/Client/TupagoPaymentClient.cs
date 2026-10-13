@@ -8,18 +8,21 @@ using TuPago3.Sdk.Generated.V1;
 using TuPago3.Sdk.Models;
 using TuPago3.Sdk.Retry;
 using TuPago3.Sdk.Security;
+using TuPago3.Sdk.Transport;
 
 namespace TuPago3.Sdk.Client;
 
 using Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
-/// Idiomatic, thread-safe, reusable gRPC client for the TuPago3 PaymentService.
+/// Idiomatic, thread-safe, reusable client for the TuPago3 PaymentService.
+/// Currently gRPC-only. Transport selection is present in options; REST and GraphQL
+/// implementations are foundation-only pending verified backend3 wire contracts.
 /// <list type="bullet">
 ///   <item>Async Task-based methods with <see cref="CancellationToken"/> and per-call deadlines.</item>
 ///   <item>Dynamic JWT injection via <see cref="ITokenProvider"/> (never stored on the channel).</item>
 ///   <item>Fail-closed TLS: remote targets require verified TLS; private CA supported.</item>
-///   <item>Bounded read retry; Create RPCs are EXACTLY ONE attempt (no blind retry).</item>
+///   <item>Bounded read retry; Create RPCs are single-attempt / no-blind-retry.</item>
 ///   <item>Typed errors: UnknownOutcome / PendingReconciliation are never auto-retried.</item>
 /// </list>
 /// </summary>
@@ -34,6 +37,8 @@ public sealed class TupagoPaymentClient : IAsyncDisposable, IDisposable
     public TupagoPaymentClient(TupagoClientOptions options)
     {
         _options = (options ?? throw new TupagoConfigException("Options", "options required")).Validate();
+        if (_options.Transport != TransportKind.Grpc)
+            throw new TupagoConfigException("Transport", "only TransportKind.Grpc is implemented; REST and GraphQL are foundation stubs");
         _logger = _options.LoggerFactory?.CreateLogger<TupagoPaymentClient>();
 
         var scheme = _options.UseTls ? "https" : "http";
@@ -81,7 +86,7 @@ public sealed class TupagoPaymentClient : IAsyncDisposable, IDisposable
     public Task<JsonResponse> GetTelefonicoStatusAsync(GetStatusRequest request, CancellationToken cancellationToken = default)
         => ReadAsync<JsonResponse>("GetTelefonicoStatus", cancellationToken, ct => Raw.GetTelefonicoStatusAsync(Validate(request), deadline: Deadline(ct), cancellationToken: ct).ResponseAsync);
 
-    // ---- Creates (EXACTLY ONE attempt, never retried) ---------------------
+    // ---- Creates (single-attempt / no-blind-retry) -------------------------
 
     public Task<JsonResponse> CreateQrAsync(CreateQrRequest request, CancellationToken cancellationToken = default)
     {
@@ -162,7 +167,7 @@ public sealed class TupagoPaymentClient : IAsyncDisposable, IDisposable
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
             _channel.Dispose();
-            _options.LoggerFactory?.Dispose();
+            // LoggerFactory is caller-owned; do not dispose it here.
         }
     }
 
@@ -171,15 +176,9 @@ public sealed class TupagoPaymentClient : IAsyncDisposable, IDisposable
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
             _channel.Dispose();
-            if (_options.LoggerFactory is not null)
-                await Cast(_options.LoggerFactory).ConfigureAwait(false);
+            // LoggerFactory is caller-owned; do not dispose it here.
         }
-    }
-
-    private static async ValueTask Cast(ILoggerFactory factory)
-    {
-        if (factory is IAsyncDisposable ad) await ad.DisposeAsync().ConfigureAwait(false);
-        else factory.Dispose();
+        await ValueTask.CompletedTask;
     }
 }
 
