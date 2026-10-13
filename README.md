@@ -1,38 +1,65 @@
 # TuPago3.Sdk
 
-Official .NET/C# SDK for the **TuPago3 PaymentService** gRPC API.
+SDK oficial .NET/C# para el **TuPago3 PaymentService**.
 
 - Target: `net10.0`
-- Transport-security enforced (TLS required for remote targets; plaintext only for loopback)
-- Dynamic JWT injection via `ITokenProvider` (never stored on the channel)
-- Bounded read retry; **Create RPCs use single-attempt / no-blind-retry financial create**
-- Typed errors: `TupagoUnknownOutcomeException`, `TupagoPendingReconciliationException`
+- Transportes: **gRPC** (default), **REST** y **GraphQL**
+- Seguridad de transporte: TLS obligatorio para destinos remotos; plaintext solo para identidades locales explícitas
+- Inyección dinámica de JWT vía `ITokenProvider` (nunca almacenado en el canal)
+- Retry acotado en lecturas; **creates con un solo intento / no-blind-retry**
+- Errores tipados: `TupagoUnknownOutcomeException`, `TupagoPendingReconciliationException`
 
-## Quick start
+## Inicio rápido
 
 ```csharp
 using TuPago3.Sdk;
 using TuPago3.Sdk.Authentication;
 using TuPago3.Sdk.Client;
+using TuPago3.Sdk.Transport;
 
 var client = new TupagoPaymentClient(new TupagoClientOptions
 {
     Target = "127.0.0.1:9090",
-    UseTls = false, // loopback dev only
+    UseTls = false,                      // solo loopback / lab
+    Transport = TransportKind.Grpc,      // Grpc | Rest | GraphQl
     Credentials = new StaticTokenProvider(token),
+    // AllowUnauthenticatedLab = true,   // solo para tests de lab explícitos
 });
 
 var perfil = await client.GetClienteAsync(new GetClienteRequest { Id = 1 });
 await client.DisposeAsync();
 ```
 
-## Financial invariants
+## Invariantes financieras
 
-`CreateQr` / `CreateTelefonico` issue **at most one** SDK dispatch per public call (single-attempt / no-blind-retry). Transient transport
-errors after the request is sent map to `TupagoUnknownOutcomeException` (reconcile with the same idempotency key, do not blind-retry).
-`TUPAGO_PENDING_RECONCILIATION` (ABORTED) maps to `TupagoPendingReconciliationException`. The
-idempotency key is preserved verbatim and never regenerated.
+`CreateQr` / `CreateTelefonico` realizan **como máximo un** dispatch por llamada pública (single-attempt / no-blind-retry).
 
-## License
+- Errores de transporte ambiguos después de posible envío → `TupagoUnknownOutcomeException` (reconciliar con la misma idempotency key, no reintentar a ciegas).
+- `TUPAGO_PENDING_RECONCILIATION` (ABORTED) → `TupagoPendingReconciliationException`.
+- La idempotency key se preserva verbatim y nunca se regenera.
 
-Proprietary. Internal controlled distribution only.
+## Transportes
+
+| Transporte | Estado | Notas |
+|------------|--------|-------|
+| gRPC | Completo | Transporte por defecto |
+| REST | Implementado | Rutas verificadas contra backend3 (`msjpagoqrusuario`, `estatusmsjqr`, etc.) |
+| GraphQL | Implementado | Operaciones ByCuenta + mutations; mapeo de `extensions.code` |
+
+Selecciona el transporte con `TupagoClientOptions.Transport`.
+
+## Hardening aplicado
+
+- Terminología corregida (single-attempt / no-blind-retry)
+- Retry de lecturas reducido (solo Unavailable + DeadlineExceeded)
+- Sin límites comerciales inventados en Money
+- `CANCELLED` ya no se trata como resultado definido en creates
+- Auth fail-closed por defecto (requiere `AllowUnauthenticatedLab` para omitir credenciales)
+- Token en blanco falla antes del dispatch
+- TLS loopback sin confianza DNS/TOCTOU
+- Validación de hostname más estricta
+- El SDK no dispone el `LoggerFactory` del caller
+
+## Licencia
+
+Propietaria. Distribución interna controlada únicamente.
