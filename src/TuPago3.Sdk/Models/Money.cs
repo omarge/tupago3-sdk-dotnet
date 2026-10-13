@@ -5,29 +5,28 @@ namespace TuPago3.Sdk.Models;
 
 /// <summary>
 /// The wire Protobuf field `monto` is a <c>double</c>. double does NOT provide exact decimal
-/// financial semantics. This helper accepts decimal input where reasonable, rejects unsafe values
-/// explicitly and converts to double without silent precision loss or rounding.
+/// financial semantics. This helper rejects unsafe values (NaN, Infinity, non-positive) and
+/// converts decimal input to double. Note that decimal-to-double conversion can lose precision
+/// by design; callers that need exact decimal semantics must handle that outside the SDK.
+/// Backend is the policy authority for commercial limits; the SDK does not invent them.
 /// </summary>
 public static class Money
 {
-    // Documented SDK bounds for a single payment (MXN pesos). Do not invent commercial limits.
-    public const double MinMonto = 0.01d;
-    public const double MaxMonto = 1_000_000_000.0d;
-
     /// <summary>
-    /// Validates a double monto: rejects NaN, Infinity, non-positive, sub-minimum and over-maximum.
+    /// Validates a double monto: rejects NaN, Infinity and non-positive values.
+    /// Does not enforce commercial min/max (those are backend policy).
     /// </summary>
     public static void Validate(double monto)
     {
         if (double.IsNaN(monto)) throw new TupagoConfigException("Monto", "monto is NaN");
         if (double.IsPositiveInfinity(monto) || double.IsNegativeInfinity(monto))
             throw new TupagoConfigException("Monto", "monto is Infinite");
-        if (monto < MinMonto) throw new TupagoConfigException("Monto", $"monto below minimum allowed ({MinMonto})");
-        if (monto > MaxMonto) throw new TupagoConfigException("Monto", $"monto above maximum allowed ({MaxMonto})");
+        if (monto <= 0) throw new TupagoConfigException("Monto", "monto must be strictly positive");
     }
 
     /// <summary>
-    /// Validates a decimal monto (exact input) and converts to double with overflow detection.
+    /// Validates a decimal monto and converts to double with overflow detection.
+    /// Precision may be lost; this is inherent to double.
     /// </summary>
     public static double FromDecimal(decimal monto)
     {
