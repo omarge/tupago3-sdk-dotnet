@@ -5,7 +5,7 @@ Official .NET/C# SDK for the **TuPago3 PaymentService** gRPC API.
 - Target: `net10.0`
 - Transport-security enforced (TLS required for remote targets; plaintext only for loopback)
 - Dynamic JWT injection via `ITokenProvider` (never stored on the channel)
-- Bounded read retry; **Create RPCs are exactly-once dispatch** (no blind retry)
+- Bounded read retry; **Create RPCs use single-attempt / no-blind-retry financial create**
 - Typed errors: `TupagoUnknownOutcomeException`, `TupagoPendingReconciliationException`
 
 ## Quick start
@@ -28,8 +28,8 @@ await client.DisposeAsync();
 
 ## Financial invariants
 
-`CreateQr` / `CreateTelefonico` issue **at most one** dispatch per public call. Transient transport
-errors after the request is sent map to `TupagoUnknownOutcomeException` (reconcile, do not blind-retry).
+`CreateQr` / `CreateTelefonico` issue **at most one** SDK dispatch per public call (single-attempt / no-blind-retry). Transient transport
+errors after the request is sent map to `TupagoUnknownOutcomeException` (reconcile with the same idempotency key, do not blind-retry).
 `TUPAGO_PENDING_RECONCILIATION` (ABORTED) maps to `TupagoPendingReconciliationException`. The
 idempotency key is preserved verbatim and never regenerated.
 
