@@ -16,31 +16,35 @@ using Microsoft.Extensions.DependencyInjection;
 
 /// <summary>
 /// Idiomatic, thread-safe, reusable client for the TuPago3 PaymentService.
-/// Currently gRPC-only. Transport selection is present in options; REST and GraphQL
-/// implementations are foundation-only pending verified backend3 wire contracts.
-/// <list type="bullet">
-///   <item>Async Task-based methods with <see cref="CancellationToken"/> and per-call deadlines.</item>
-///   <item>Dynamic JWT injection via <see cref="ITokenProvider"/> (never stored on the channel).</item>
-///   <item>Fail-closed TLS: remote targets require verified TLS; private CA supported.</item>
-///   <item>Bounded read retry; Create RPCs are single-attempt / no-blind-retry.</item>
-///   <item>Typed errors: UnknownOutcome / PendingReconciliation are never auto-retried.</item>
-/// </list>
+/// Supports gRPC (default), REST and GraphQL via <see cref="TupagoClientOptions.Transport"/>.
+/// Creates are single-attempt / no-blind-retry across all transports.
 /// </summary>
 public sealed class TupagoPaymentClient : IAsyncDisposable, IDisposable
 {
     private readonly TupagoClientOptions _options;
-    private readonly GrpcChannel _channel;
-    private readonly CallInvoker _invoker;
+    private readonly IPaymentTransport? _transport;
+    private readonly GrpcChannel? _channel;
+    private readonly CallInvoker? _invoker;
     private readonly ILogger? _logger;
     private int _disposed;
 
     public TupagoPaymentClient(TupagoClientOptions options)
     {
         _options = (options ?? throw new TupagoConfigException("Options", "options required")).Validate();
-        if (_options.Transport != TransportKind.Grpc)
-            throw new TupagoConfigException("Transport", "only TransportKind.Grpc is implemented; REST and GraphQL are foundation stubs");
         _logger = _options.LoggerFactory?.CreateLogger<TupagoPaymentClient>();
 
+        if (_options.Transport == TransportKind.Rest)
+        {
+            _transport = new RestPaymentTransport(_options);
+            return;
+        }
+        if (_options.Transport == TransportKind.GraphQl)
+        {
+            _transport = new GraphQlPaymentTransport(_options);
+            return;
+        }
+
+        // Default: gRPC
         var scheme = _options.UseTls ? "https" : "http";
         var address = $"{scheme}://{_options.Target}";
 
@@ -50,7 +54,6 @@ public sealed class TupagoPaymentClient : IAsyncDisposable, IDisposable
             SslOptions = _options.UseTls
                 ? TlsPolicy.BuildSslOptions(_options.CaCertificatePem, _options.ServerName)
                 : null!,
-            // NOTE: no ServerCertificateCustomValidationCallback that returns true is ever set.
         };
 
         var handler = new SendTrackingHandler { InnerHandler = socketsHandler };
@@ -70,39 +73,45 @@ public sealed class TupagoPaymentClient : IAsyncDisposable, IDisposable
         _invoker = invoker;
     }
 
-    private PaymentService.PaymentServiceClient Raw => new(_invoker);
-
-    // ---- Reads (bounded retry) --------------------------------------------
+    private PaymentService.PaymentServiceClient Raw => new(_invoker!);
 
     public Task<ClientePerfil> GetClienteAsync(GetClienteRequest request, CancellationToken cancellationToken = default)
-        => ReadAsync<ClientePerfil>("GetCliente", cancellationToken, ct => Raw.GetClienteAsync(Validate(request), deadline: Deadline(ct), cancellationToken: ct).ResponseAsync);
+        => _transport is not null
+            ? _transport.GetClienteAsync(Validate(request), cancellationToken)
+            : ReadAsync<ClientePerfil>("GetCliente", cancellationToken, ct => Raw.GetClienteAsync(Validate(request), deadline: Deadline(ct), cancellationToken: ct).ResponseAsync);
 
     public Task<CatalogoInstitucion> GetCatalogoAsync(GetCatalogoRequest request, CancellationToken cancellationToken = default)
-        => ReadAsync<CatalogoInstitucion>("GetCatalogo", cancellationToken, ct => Raw.GetCatalogoAsync(Validate(request), deadline: Deadline(ct), cancellationToken: ct).ResponseAsync);
+        => _transport is not null
+            ? _transport.GetCatalogoAsync(Validate(request), cancellationToken)
+            : ReadAsync<CatalogoInstitucion>("GetCatalogo", cancellationToken, ct => Raw.GetCatalogoAsync(Validate(request), deadline: Deadline(ct), cancellationToken: ct).ResponseAsync);
 
     public Task<JsonResponse> GetQrStatusAsync(GetStatusRequest request, CancellationToken cancellationToken = default)
-        => ReadAsync<JsonResponse>("GetQrStatus", cancellationToken, ct => Raw.GetQrStatusAsync(Validate(request), deadline: Deadline(ct), cancellationToken: ct).ResponseAsync);
+        => _transport is not null
+            ? _transport.GetQrStatusAsync(Validate(request), cancellationToken)
+            : ReadAsync<JsonResponse>("GetQrStatus", cancellationToken, ct => Raw.GetQrStatusAsync(Validate(request), deadline: Deadline(ct), cancellationToken: ct).ResponseAsync);
 
     public Task<JsonResponse> GetTelefonicoStatusAsync(GetStatusRequest request, CancellationToken cancellationToken = default)
-        => ReadAsync<JsonResponse>("GetTelefonicoStatus", cancellationToken, ct => Raw.GetTelefonicoStatusAsync(Validate(request), deadline: Deadline(ct), cancellationToken: ct).ResponseAsync);
-
-    // ---- Creates (single-attempt / no-blind-retry) -------------------------
+        => _transport is not null
+            ? _transport.GetTelefonicoStatusAsync(Validate(request), cancellationToken)
+            : ReadAsync<JsonResponse>("GetTelefonicoStatus", cancellationToken, ct => Raw.GetTelefonicoStatusAsync(Validate(request), deadline: Deadline(ct), cancellationToken: ct).ResponseAsync);
 
     public Task<JsonResponse> CreateQrAsync(CreateQrRequest request, CancellationToken cancellationToken = default)
     {
         ValidateCreate(request);
-        return CreateOnceAsync<JsonResponse>("CreateQr", request.IdempotencyKey, cancellationToken,
-            ct => Raw.CreateQrAsync(request, deadline: Deadline(ct), cancellationToken: ct).ResponseAsync);
+        return _transport is not null
+            ? _transport.CreateQrAsync(request, cancellationToken)
+            : CreateOnceAsync<JsonResponse>("CreateQr", request.IdempotencyKey, cancellationToken,
+                ct => Raw.CreateQrAsync(request, deadline: Deadline(ct), cancellationToken: ct).ResponseAsync);
     }
 
     public Task<JsonResponse> CreateTelefonicoAsync(CreateTelefonicoRequest request, CancellationToken cancellationToken = default)
     {
         ValidateCreate(request);
-        return CreateOnceAsync<JsonResponse>("CreateTelefonico", request.IdempotencyKey, cancellationToken,
-            ct => Raw.CreateTelefonicoAsync(request, deadline: Deadline(ct), cancellationToken: ct).ResponseAsync);
+        return _transport is not null
+            ? _transport.CreateTelefonicoAsync(request, cancellationToken)
+            : CreateOnceAsync<JsonResponse>("CreateTelefonico", request.IdempotencyKey, cancellationToken,
+                ct => Raw.CreateTelefonicoAsync(request, deadline: Deadline(ct), cancellationToken: ct).ResponseAsync);
     }
-
-    // ---- Internals --------------------------------------------------------
 
     private DateTime? Deadline(CancellationToken ct)
         => _options.DefaultDeadline > TimeSpan.Zero ? DateTime.UtcNow + _options.DefaultDeadline : null;
@@ -160,14 +169,12 @@ public sealed class TupagoPaymentClient : IAsyncDisposable, IDisposable
         Money.Validate(req.Monto);
     }
 
-    // ---- DI extension -----------------------------------------------------
-
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
-            _channel.Dispose();
-            // LoggerFactory is caller-owned; do not dispose it here.
+            _channel?.Dispose();
+            _transport?.DisposeAsync().AsTask().GetAwaiter().GetResult();
         }
     }
 
@@ -175,17 +182,13 @@ public sealed class TupagoPaymentClient : IAsyncDisposable, IDisposable
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 0)
         {
-            _channel.Dispose();
-            // LoggerFactory is caller-owned; do not dispose it here.
+            _channel?.Dispose();
+            if (_transport is not null)
+                await _transport.DisposeAsync().ConfigureAwait(false);
         }
-        await ValueTask.CompletedTask;
     }
 }
 
-/// <summary>
-/// Optional DI integration: registers <see cref="TupagoPaymentClient"/> as a singleton.
-/// Does not force ASP.NET Core as a dependency.
-/// </summary>
 public static class TupagoServiceCollectionExtensions
 {
     public static Microsoft.Extensions.DependencyInjection.IServiceCollection AddTuPagoClient(
