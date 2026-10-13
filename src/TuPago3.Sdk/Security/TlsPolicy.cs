@@ -141,16 +141,14 @@ public static class TlsPolicy
                 if (eq < 0) continue;
                 var value = line[(eq + 1)..].Trim();
                 if (string.Equals(value, host, StringComparison.OrdinalIgnoreCase)) return true;
-                // Wildcard must not match multiple labels (e.g. *.example.com must not match a.b.example.com)
-                if (value.StartsWith("*.") && !host.Contains('.') && host.EndsWith(value[1..], StringComparison.OrdinalIgnoreCase))
-                    return true;
-                if (value.StartsWith("*."))
+                // Wildcard: *.example.com matches foo.example.com but not a.b.example.com
+                if (value.StartsWith("*.", StringComparison.Ordinal))
                 {
-                    var suffix = value[1..];
+                    var suffix = value[1..]; // ".example.com"
                     if (host.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
                     {
                         var prefix = host[..^suffix.Length];
-                        if (!prefix.Contains('.') && prefix.Length > 0)
+                        if (prefix.Length > 0 && !prefix.Contains('.'))
                             return true;
                     }
                 }
