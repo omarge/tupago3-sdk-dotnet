@@ -31,6 +31,17 @@ var perfil = await client.GetClienteAsync(new GetClienteRequest { Id = 1 });
 await client.DisposeAsync();
 ```
 
+## ByCuenta en consultas de estatus
+
+Cuando el caller proporciona `idCuenta`, el SDK usa las rutas **ByCuenta** del backend:
+
+| Operación | Ruta REST (ByCuenta) | GraphQL |
+|------------|----------------------|---------|
+| GetQrStatus | `POST /api/payments/estatusmsjqr` | `pagoQrEstatusByCuenta` |
+| GetTelefonicoStatus | `POST /api/payments/estatusmsjcobrotelefonico` | `pagoTelefonicoEstatusByCuenta` |
+
+Esto permite que el cliente indique explícitamente la cuenta, en lugar de dejar que el backend resuelva la cuenta del usuario autenticado.
+
 ## Invariantes financieras
 
 `CreateQr` / `CreateTelefonico` realizan **como máximo un** dispatch por llamada pública (single-attempt / no-blind-retry).
@@ -44,7 +55,7 @@ await client.DisposeAsync();
 | Transporte | Estado | Notas |
 |------------|--------|-------|
 | gRPC | Completo | Transporte por defecto |
-| REST | Completo | Rutas verificadas contra backend3 |
+| REST | Completo | Rutas verificadas contra backend3; ByCuenta en status |
 | GraphQL | Completo | Operaciones ByCuenta + mutations |
 
 Selecciona el transporte con `TupagoClientOptions.Transport`.
