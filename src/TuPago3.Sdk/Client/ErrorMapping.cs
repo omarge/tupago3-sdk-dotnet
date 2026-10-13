@@ -27,11 +27,17 @@ internal static class ErrorMapping
             return new TupagoPendingReconciliationException(operation, msg);
         if (IsDefiniteCreateOutcome(code))
             return new TupagoException(operation, code, msg, false, requestSent);
+        // CANCELLED and other non-definite codes after possible dispatch become UnknownOutcome.
         if (requestSent)
             return new TupagoUnknownOutcomeException(operation, code, msg, idempotencyKey);
         return new TupagoException(operation, code, "request not sent: " + msg, false, false);
     }
 
+    /// <summary>
+    /// Codes that are definite even for financial creates (server rejected before committing or
+    /// the request never left the process in a way that could have succeeded). CANCELLED is NOT
+    /// included: a mid-flight cancellation can leave the outcome ambiguous.
+    /// </summary>
     private static bool IsDefiniteCreateOutcome(StatusCode code) => code switch
     {
         StatusCode.NotFound => true,
@@ -41,7 +47,6 @@ internal static class ErrorMapping
         StatusCode.Unauthenticated => true,
         StatusCode.FailedPrecondition => true,
         StatusCode.OutOfRange => true,
-        StatusCode.Cancelled => true,
         _ => false
     };
 
