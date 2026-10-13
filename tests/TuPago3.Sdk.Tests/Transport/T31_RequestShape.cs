@@ -8,59 +8,64 @@ using Xunit;
 namespace TuPago3.Sdk.Tests.Transport;
 
 /// <summary>
-/// Request shape tests for REST and GraphQL transports.
-/// Uses a local HttpListener to capture the actual request without a real backend.
+/// Request shape tests for REST transport.
+/// Captures the actual HTTP request sent by RestPaymentTransport.
 /// </summary>
 public sealed class T31_RequestShape : IDisposable
 {
     private readonly HttpListener _listener;
-    private readonly string _baseUrl;
-    private Task? _serverTask;
+    private readonly string _prefix;
+    private string? _capturedPath;
+    private string? _capturedIdempotency;
+    private string? _capturedBody;
 
     public T31_RequestShape()
     {
+        var port = GetFreePort();
+        _prefix = $"http://127.0.0.1:{port}/";
         _listener = new HttpListener();
-        _baseUrl = "http://127.0.0.1:" + GetFreePort() + "/";
-        _listener.Prefixes.Add(_baseUrl);
+        _listener.Prefixes.Add(_prefix);
         _listener.Start();
-        _serverTask = Task.Run(HandleRequests);
+        _ = Task.Run(CaptureLoop);
     }
 
     private static int GetFreePort()
     {
         var l = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
         l.Start();
-        var port = ((IPEndPoint)l.LocalEndpoint).Port;
+        var p = ((IPEndPoint)l.LocalEndpoint).Port;
         l.Stop();
-        return port;
+        return p;
     }
 
-    private async Task HandleRequests()
+    private async Task CaptureLoop()
     {
         while (_listener.IsListening)
         {
             try
             {
                 var ctx = await _listener.GetContextAsync();
-                var req = ctx.Request;
-                var body = new StreamReader(req.InputStream).ReadToEnd();
-                var resp = ctx.Response;
-                resp.StatusCode = 200;
-                var responseBody = Encoding.UTF8.GetBytes("{\"ok\":true}");
-                resp.ContentLength64 = responseBody.Length;
-                await resp.OutputStream.WriteAsync(responseBody);
-                resp.Close();
+                _capturedPath = ctx.Request.Url?.AbsolutePath;
+                _capturedIdempotency = ctx.Request.Headers["Idempotency-Key"];
+                using var reader = new StreamReader(ctx.Request.InputStream);
+                _capturedBody = await reader.ReadToEndAsync();
+                var resp = Encoding.UTF8.GetBytes("{\"mensaje\":{\"ok\":true}}");
+                ctx.Response.StatusCode = 200;
+                ctx.Response.ContentLength64 = resp.Length;
+                await ctx.Response.OutputStream.WriteAsync(resp);
+                ctx.Response.Close();
             }
-            catch { /* listener closed */ }
+            catch { }
         }
     }
 
     [Fact]
-    public async Task Rest_CreateQr_UsesCorrectPath_AndIdempotencyHeader()
+    public async Task Rest_CreateQr_SendsCorrectPath_AndIdempotencyHeader()
     {
+        var uri = new Uri(_prefix);
         var opts = new TupagoClientOptions
         {
-            Target = new Uri(_baseUrl).Host + ":" + new Uri(_baseUrl).Port,
+            Target = $"{uri.Host}:{uri.Port}",
             UseTls = false,
             Transport = TransportKind.Rest,
             AllowUnauthenticatedLab = true,
@@ -71,17 +76,18 @@ public sealed class T31_RequestShape : IDisposable
             IdCuenta = 1,
             Monto = 100.0,
             Concepto = "test",
-            IdempotencyKey = "key-123",
+            IdempotencyKey = "shape-key-1",
         };
-        // The call will fail or succeed depending on response shape; we only care about the request.
         try { await client.CreateQrAsync(req); } catch { }
-        // Shape is validated by the transport implementation; this test documents the contract.
-        Assert.Equal(TransportKind.Rest, opts.Transport);
+
+        Assert.Equal("/api/payments/msjpagoqrusuario", _capturedPath);
+        Assert.Equal("shape-key-1", _capturedIdempotency);
+        Assert.Contains("idCuenta", _capturedBody);
+        Assert.Contains("monto", _capturedBody);
     }
 
     public void Dispose()
     {
         _listener.Stop();
-        _serverTask?.Wait(500);
     }
 }
