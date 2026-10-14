@@ -123,7 +123,7 @@ public sealed class RestPaymentTransport : IPaymentTransport
             tipoPago = request.TipoPago,
             vigencia = request.Vigencia,
         };
-        var json = await PostAsync("/api/payments/msjpagoqrusuario", body, request.IdempotencyKey, cancellationToken).ConfigureAwait(false);
+        var json = await PostAsync("/api/payments/msjpagoqrusuario", body, request.IdempotencyKey, cancellationToken, isCreate: true).ConfigureAwait(false);
         using var doc = JsonDocument.Parse(json);
         if (doc.RootElement.TryGetProperty("mensaje", out var mensaje))
             return new JsonResponse { Json = mensaje.GetRawText() };
@@ -144,7 +144,7 @@ public sealed class RestPaymentTransport : IPaymentTransport
             numeroCelular = request.NumeroCelular,
             vigencia = request.Vigencia,
         };
-        var json = await PostAsync("/api/payments/msjpagotelefonicousuario", body, request.IdempotencyKey, cancellationToken).ConfigureAwait(false);
+        var json = await PostAsync("/api/payments/msjpagotelefonicousuario", body, request.IdempotencyKey, cancellationToken, isCreate: true).ConfigureAwait(false);
         return new JsonResponse { Json = json };
     }
 
@@ -153,10 +153,10 @@ public sealed class RestPaymentTransport : IPaymentTransport
         using var req = new HttpRequestMessage(HttpMethod.Get, path);
         await AddAuthAsync(req, ct).ConfigureAwait(false);
         using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
-        return await ReadResponseAsync(resp).ConfigureAwait(false);
+        return await ReadResponseAsync(resp, isCreate: false).ConfigureAwait(false);
     }
 
-    private async Task<string> PostAsync(string path, object body, string? idempotencyKey, CancellationToken ct)
+    private async Task<string> PostAsync(string path, object body, string? idempotencyKey, CancellationToken ct, bool isCreate = false)
     {
         using var req = new HttpRequestMessage(HttpMethod.Post, path);
         req.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
@@ -164,7 +164,7 @@ public sealed class RestPaymentTransport : IPaymentTransport
             req.Headers.TryAddWithoutValidation("Idempotency-Key", idempotencyKey);
         await AddAuthAsync(req, ct).ConfigureAwait(false);
         using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
-        return await ReadResponseAsync(resp).ConfigureAwait(false);
+        return await ReadResponseAsync(resp, isCreate).ConfigureAwait(false);
     }
 
     private async Task AddAuthAsync(HttpRequestMessage req, CancellationToken ct)
@@ -176,12 +176,16 @@ public sealed class RestPaymentTransport : IPaymentTransport
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
     }
 
-    private static async Task<string> ReadResponseAsync(HttpResponseMessage resp)
+    private static async Task<string> ReadResponseAsync(HttpResponseMessage resp, bool isCreate = false)
     {
         var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+        var status = (int)resp.StatusCode;
         // Handle 202 PendingReconciliation BEFORE treating as success.
-        if ((int)resp.StatusCode == 202)
+        if (status == 202)
             throw new TupagoException("REST", Grpc.Core.StatusCode.Aborted, $"HTTP 202 PendingReconciliation: {body}", false);
+        // CREATE: 502/503/504 after dispatch = UnknownOutcome (not retryable).
+        if (isCreate && status is 502 or 503 or 504)
+            throw new TupagoUnknownOutcomeException("REST", $"HTTP {status} after create dispatch: {body}");
         if (resp.IsSuccessStatusCode) return body;
 
         var code = resp.StatusCode switch
@@ -193,7 +197,7 @@ public sealed class RestPaymentTransport : IPaymentTransport
             System.Net.HttpStatusCode.BadRequest => Grpc.Core.StatusCode.InvalidArgument,
             _ => Grpc.Core.StatusCode.Unknown,
         };
-        throw new TupagoException("REST", code, $"HTTP {(int)resp.StatusCode}: {body}", false);
+        throw new TupagoException("REST", code, $"HTTP {status}: {body}", false);
     }
 
     public ValueTask DisposeAsync()
