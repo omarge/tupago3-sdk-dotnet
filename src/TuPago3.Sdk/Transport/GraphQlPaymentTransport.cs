@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -50,16 +51,18 @@ public sealed class GraphQlPaymentTransport : IPaymentTransport
         {
             Cliente = new Cliente
             {
-                Id = cliente.GetProperty("id").GetInt64(),
-                Nombre = cliente.GetProperty("nombre").GetString() ?? "",
-                ClaveInstitucion = cliente.GetProperty("claveInstitucion").GetString() ?? "",
-                Key = cliente.TryGetProperty("key", out var k) ? k.GetString() ?? "" : "",
+                Id = ReadRequiredInt64Id(cliente, "id", "GetCliente.cliente"),
+                Nombre = ReadRequiredString(cliente, "nombre", "GetCliente.cliente"),
+                ClaveInstitucion = ReadRequiredString(cliente, "claveInstitucion", "GetCliente.cliente"),
+                Key = cliente.TryGetProperty("key", out var k) && k.ValueKind == JsonValueKind.String
+                    ? k.GetString() ?? ""
+                    : "",
             },
             CatalogoInstitucion = new CatalogoInstitucion
             {
-                Id = catalogo.GetProperty("id").GetInt64(),
-                ClaveInstitucion = catalogo.GetProperty("claveInstitucion").GetString() ?? "",
-                NombreCorto = catalogo.GetProperty("nombreCorto").GetString() ?? "",
+                Id = ReadRequiredInt64Id(catalogo, "id", "GetCliente.catalogoInstitucion"),
+                ClaveInstitucion = ReadRequiredString(catalogo, "claveInstitucion", "GetCliente.catalogoInstitucion"),
+                NombreCorto = ReadRequiredString(catalogo, "nombreCorto", "GetCliente.catalogoInstitucion"),
             }
         };
     }
@@ -72,9 +75,9 @@ public sealed class GraphQlPaymentTransport : IPaymentTransport
             "GetCatalogo", "catalogoInstitucion", query, vars, cancellationToken, isCreate: false).ConfigureAwait(false);
         return new CatalogoInstitucion
         {
-            Id = data.GetProperty("id").GetInt64(),
-            ClaveInstitucion = data.GetProperty("claveInstitucion").GetString() ?? "",
-            NombreCorto = data.GetProperty("nombreCorto").GetString() ?? "",
+            Id = ReadRequiredInt64Id(data, "id", "GetCatalogo"),
+            ClaveInstitucion = ReadRequiredString(data, "claveInstitucion", "GetCatalogo"),
+            NombreCorto = ReadRequiredString(data, "nombreCorto", "GetCatalogo"),
         };
     }
 
@@ -141,6 +144,47 @@ public sealed class GraphQlPaymentTransport : IPaymentTransport
             "CreateTelefonico", "createPagoTelefonico", mutation, vars, cancellationToken,
             isCreate: true, idempotencyKey: request.IdempotencyKey).ConfigureAwait(false);
         return new JsonResponse { Json = data.GetRawText() };
+    }
+
+    private static long ReadRequiredInt64Id(JsonElement obj, string property, string operation)
+    {
+        if (!obj.TryGetProperty(property, out var value))
+            throw new TupagoException(operation, Grpc.Core.StatusCode.Internal,
+                $"malformed GraphQL response: missing {property}", false);
+
+        long parsed;
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out parsed))
+        {
+            // parsed below
+        }
+        else if (value.ValueKind == JsonValueKind.String
+                 && long.TryParse(value.GetString(), NumberStyles.None, CultureInfo.InvariantCulture, out parsed))
+        {
+            // GraphQL ID is normally serialized as a decimal string.
+        }
+        else
+        {
+            throw new TupagoException(operation, Grpc.Core.StatusCode.Internal,
+                $"malformed GraphQL response: {property} is not an int64 ID", false);
+        }
+
+        if (parsed <= 0)
+            throw new TupagoException(operation, Grpc.Core.StatusCode.Internal,
+                $"malformed GraphQL response: {property} must be positive", false);
+        return parsed;
+    }
+
+    private static string ReadRequiredString(JsonElement obj, string property, string operation)
+    {
+        if (!obj.TryGetProperty(property, out var value) || value.ValueKind != JsonValueKind.String)
+            throw new TupagoException(operation, Grpc.Core.StatusCode.Internal,
+                $"malformed GraphQL response: missing {property}", false);
+
+        var text = value.GetString();
+        if (string.IsNullOrWhiteSpace(text))
+            throw new TupagoException(operation, Grpc.Core.StatusCode.Internal,
+                $"malformed GraphQL response: blank {property}", false);
+        return text;
     }
 
     private async Task<JsonElement> ExecuteFieldAsync(
