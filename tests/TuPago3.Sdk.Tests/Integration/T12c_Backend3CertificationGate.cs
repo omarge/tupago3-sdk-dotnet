@@ -20,7 +20,8 @@ namespace TuPago3.Sdk.Tests.Integration;
 /// </summary>
 public class T12c_Backend3CertificationGate
 {
-    private const string Address = "127.0.0.1:9090";
+    // Env-aware: point at the isolated lab gRPC port (defaults to the conventional 9090).
+    private static string Address => Environment.GetEnvironmentVariable("TUPAGO_BACKEND_ADDR") ?? "127.0.0.1:9090";
     private readonly ITestOutputHelper _output;
 
     public T12c_Backend3CertificationGate(ITestOutputHelper output) => _output = output;
@@ -29,8 +30,9 @@ public class T12c_Backend3CertificationGate
     {
         try
         {
+            var uri = new Uri("http://" + Address);
             using var s = new TcpClient();
-            return s.ConnectAsync("127.0.0.1", 9090).Wait(TimeSpan.FromSeconds(3)) && s.Connected;
+            return s.ConnectAsync(uri.Host, uri.Port).Wait(TimeSpan.FromSeconds(3)) && s.Connected;
         }
         catch { return false; }
     }
@@ -72,8 +74,8 @@ public class T12c_Backend3CertificationGate
         // --- GetCatalogo: concrete positive read ---
         await using (var client = ClientFor(token))
         {
-            var cat = await client.GetCatalogoAsync(new GetCatalogoRequest { ClaveInstitucion = "40030" });
-            Assert.Equal("40030", cat.ClaveInstitucion);
+            var cat = await client.GetCatalogoAsync(new GetCatalogoRequest { ClaveInstitucion = "301" });
+            Assert.Equal("301", cat.ClaveInstitucion);
             Assert.False(string.IsNullOrEmpty(cat.NombreCorto), "GetCatalogo.NombreCorto must be concrete");
             _output.WriteLine($"GetCatalogo: clave='{cat.ClaveInstitucion}' nombreCorto='{cat.NombreCorto}' id={cat.Id}");
         }
@@ -99,7 +101,9 @@ public class T12c_Backend3CertificationGate
         // --- Missing / Invalid / Expired JWT rejected (UNAUTHENTICATED) ---
         foreach (var (label, tk) in new[] { ("missing", (string?)null), ("invalid", "eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJ4In0.invalid"), ("expired", JwtForge.ForgeExpired(TestSecrets.BackendSecretBase64, "prodgcp", 2000, new[] { "ROLE_USER" })) })
         {
-            await using var c = tk is null ? new TupagoPaymentClient(new TupagoClientOptions { Target = Address, UseTls = false }) : ClientFor(tk);
+            await using var c = tk is null
+                ? new TupagoPaymentClient(new TupagoClientOptions { Target = Address, UseTls = false, AllowUnauthenticatedLab = true })
+                : ClientFor(tk);
             var ex = await Assert.ThrowsAnyAsync<TupagoException>(() =>
                 c.GetCatalogoAsync(new GetCatalogoRequest { ClaveInstitucion = "40030" }));
             Assert.Equal(Grpc.Core.StatusCode.Unauthenticated, ex.GrpcCode);

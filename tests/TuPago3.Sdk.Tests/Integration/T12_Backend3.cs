@@ -15,14 +15,16 @@ namespace TuPago3.Sdk.Tests.Integration;
 /// </summary>
 public class Backend3RealTests
 {
-    private const string Address = "127.0.0.1:9090";
+    // Env-aware: point at the isolated lab gRPC port (defaults to the conventional 9090).
+    private static string Address => Environment.GetEnvironmentVariable("TUPAGO_BACKEND_ADDR") ?? "127.0.0.1:9090";
 
     private static bool Reachable()
     {
         try
         {
+            var uri = new Uri("http://" + Address);
             using var s = new TcpClient();
-            var task = s.ConnectAsync("127.0.0.1", 9090);
+            var task = s.ConnectAsync(uri.Host, uri.Port);
             return task.Wait(TimeSpan.FromSeconds(3)) && s.Connected;
         }
         catch { return false; }
@@ -42,7 +44,7 @@ public class Backend3RealTests
     public async Task MissingJwt_Unauthenticated()
     {
         if (!Reachable()) return;
-        await using var client = new TupagoPaymentClient(new TupagoClientOptions { Target = Address, UseTls = false });
+        await using var client = new TupagoPaymentClient(new TupagoClientOptions { Target = Address, UseTls = false, AllowUnauthenticatedLab = true });
         var ex = await Assert.ThrowsAnyAsync<TupagoException>(() =>
             client.GetCatalogoAsync(new GetCatalogoRequest { ClaveInstitucion = "BCM" }));
         Assert.Equal(Grpc.Core.StatusCode.Unauthenticated, ex.GrpcCode);
