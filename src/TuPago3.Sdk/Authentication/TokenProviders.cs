@@ -46,17 +46,15 @@ public sealed class JwtTokenProvider : ITokenProvider
         _fetch = fetch ?? throw new TupagoConfigException("Credentials", "fetch function required");
     }
 
-    public Task<string> GetTokenAsync(CancellationToken cancellationToken = default)
+    public async Task<string> GetTokenAsync(CancellationToken cancellationToken = default)
     {
         lock (_gate)
         {
             if (_cache != "" && _expiry > DateTime.UtcNow)
-                return Task.FromResult(_cache);
-            if (_fetch is null)
-                throw new TupagoConfigException("Credentials", "JwtTokenProvider has no fetcher");
+                return _cache;
         }
 
-        var tok = _fetch(cancellationToken).GetAwaiter().GetResult();
+        var tok = await _fetch(cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(tok))
             throw new TupagoConfigException("Credentials", "fetched token is empty");
 
@@ -66,7 +64,7 @@ public sealed class JwtTokenProvider : ITokenProvider
             _cache = tok;
             _expiry = exp;
         }
-        return Task.FromResult(tok);
+        return tok;
     }
 }
 
