@@ -43,38 +43,37 @@ public sealed class RestPaymentTransport : IPaymentTransport
 
     public async Task<ClientePerfil> GetClienteAsync(GetClienteRequest request, CancellationToken cancellationToken)
     {
-        // C5: GET /api/clientes/{id} + catalog composition required by program law.
+        // C5: GET /api/clientes/{id} + catalog composition. Fail-closed on missing required fields.
         var json = await GetAsync($"/api/clientes/{request.Id}", cancellationToken).ConfigureAwait(false);
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        var clave = root.TryGetProperty("claveInstitucion", out var c) ? c.GetString() ?? "" : "";
+        if (!root.TryGetProperty("id", out var idEl) || !root.TryGetProperty("nombre", out var nombreEl) || !root.TryGetProperty("claveInstitucion", out var claveEl))
+            throw new TupagoException("GetCliente", Grpc.Core.StatusCode.Internal, "malformed cliente response: missing required fields", false);
+        var clave = claveEl.GetString() ?? "";
+        if (string.IsNullOrEmpty(clave))
+            throw new TupagoException("GetCliente", Grpc.Core.StatusCode.Internal, "malformed cliente response: empty claveInstitucion", false);
         var perfil = new ClientePerfil
         {
             Cliente = new Cliente
             {
-                Id = root.TryGetProperty("id", out var id) ? id.GetInt64() : request.Id,
-                Nombre = root.TryGetProperty("nombre", out var n) ? n.GetString() ?? "" : "",
+                Id = idEl.GetInt64(),
+                Nombre = nombreEl.GetString() ?? "",
                 ClaveInstitucion = clave,
                 Key = root.TryGetProperty("key", out var k) ? k.GetString() ?? "" : "",
             }
         };
-        // Compose catalog if clave is present.
-        if (!string.IsNullOrEmpty(clave))
+        // Compose catalog. Fail-closed if catalog fetch fails.
+        var catJson = await GetAsync($"/api/catalogo-institucions/clave/{Uri.EscapeDataString(clave)}", cancellationToken).ConfigureAwait(false);
+        using var catDoc = JsonDocument.Parse(catJson);
+        var catRoot = catDoc.RootElement;
+        if (!catRoot.TryGetProperty("id", out var cidEl) || !catRoot.TryGetProperty("claveInstitucion", out var ccEl) || !catRoot.TryGetProperty("nombreCorto", out var cnEl))
+            throw new TupagoException("GetCliente", Grpc.Core.StatusCode.Internal, "malformed catalogo response: missing required fields", false);
+        perfil.CatalogoInstitucion = new CatalogoInstitucion
         {
-            try
-            {
-                var catJson = await GetAsync($"/api/catalogo-institucions/clave/{Uri.EscapeDataString(clave)}", cancellationToken).ConfigureAwait(false);
-                using var catDoc = JsonDocument.Parse(catJson);
-                var catRoot = catDoc.RootElement;
-                perfil.CatalogoInstitucion = new CatalogoInstitucion
-                {
-                    Id = catRoot.TryGetProperty("id", out var cid) ? cid.GetInt64() : 0,
-                    ClaveInstitucion = catRoot.TryGetProperty("claveInstitucion", out var cc) ? cc.GetString() ?? clave : clave,
-                    NombreCorto = catRoot.TryGetProperty("nombreCorto", out var cn) ? cn.GetString() ?? "" : "",
-                };
-            }
-            catch { /* catalog composition is best-effort; caller can query separately */ }
-        }
+            Id = cidEl.GetInt64(),
+            ClaveInstitucion = ccEl.GetString() ?? "",
+            NombreCorto = cnEl.GetString() ?? "",
+        };
         return perfil;
     }
 
