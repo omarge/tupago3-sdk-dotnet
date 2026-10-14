@@ -37,19 +37,44 @@ public sealed class GraphQlPaymentTransport : IPaymentTransport
 
     public async Task<ClientePerfil> GetClienteAsync(GetClienteRequest request, CancellationToken cancellationToken)
     {
-        var query = "query($id: ID!) { cliente(id: $id) }";
+        var query = "query($id: ID!) { cliente(id: $id) { cliente { id nombre claveInstitucion key } catalogoInstitucion { id claveInstitucion nombreCorto } } }";
         var vars = new { id = request.Id.ToString() };
         var json = await ExecuteAsync(query, vars, cancellationToken).ConfigureAwait(false);
-        // Minimal mapping; full field mapping is a follow-up once response shape is confirmed.
-        return new ClientePerfil { Cliente = new Cliente { Id = request.Id } };
+        using var doc = JsonDocument.Parse(json);
+        var data = doc.RootElement.GetProperty("data").GetProperty("cliente");
+        var cliente = data.GetProperty("cliente");
+        var catalogo = data.GetProperty("catalogoInstitucion");
+        return new ClientePerfil
+        {
+            Cliente = new Cliente
+            {
+                Id = cliente.GetProperty("id").GetInt64(),
+                Nombre = cliente.GetProperty("nombre").GetString() ?? "",
+                ClaveInstitucion = cliente.GetProperty("claveInstitucion").GetString() ?? "",
+                Key = cliente.TryGetProperty("key", out var k) ? k.GetString() ?? "" : "",
+            },
+            CatalogoInstitucion = new CatalogoInstitucion
+            {
+                Id = catalogo.GetProperty("id").GetInt64(),
+                ClaveInstitucion = catalogo.GetProperty("claveInstitucion").GetString() ?? "",
+                NombreCorto = catalogo.GetProperty("nombreCorto").GetString() ?? "",
+            }
+        };
     }
 
     public async Task<CatalogoInstitucion> GetCatalogoAsync(GetCatalogoRequest request, CancellationToken cancellationToken)
     {
-        var query = "query($clave: String!) { catalogoInstitucion(claveInstitucion: $clave) }";
+        var query = "query($clave: String!) { catalogoInstitucion(claveInstitucion: $clave) { id claveInstitucion nombreCorto } }";
         var vars = new { clave = request.ClaveInstitucion };
-        await ExecuteAsync(query, vars, cancellationToken).ConfigureAwait(false);
-        return new CatalogoInstitucion { ClaveInstitucion = request.ClaveInstitucion };
+        var json = await ExecuteAsync(query, vars, cancellationToken).ConfigureAwait(false);
+        using var doc = JsonDocument.Parse(json);
+        var data = doc.RootElement.GetProperty("data").GetProperty("catalogoInstitucion");
+        return new CatalogoInstitucion
+        {
+            Id = data.GetProperty("id").GetInt64(),
+            ClaveInstitucion = data.GetProperty("claveInstitucion").GetString() ?? "",
+            NombreCorto = data.GetProperty("nombreCorto").GetString() ?? "",
+        };
     }
 
     public async Task<JsonResponse> GetQrStatusAsync(GetStatusRequest request, CancellationToken cancellationToken)
