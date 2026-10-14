@@ -44,8 +44,4 @@
     <Protobuf Include="Protos\payment.proto" GrpcServices="Both" />
   </ItemGroup>
 
-  <ItemGroup>
-    <None Include="..\..\README.md" Pack="true" PackagePath="\" Condition="Exists('..\..\README.md')" />
-  </ItemGroup>
-
 </Project>
