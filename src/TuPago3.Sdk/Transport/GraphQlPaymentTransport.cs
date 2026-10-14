@@ -22,7 +22,7 @@ public sealed class GraphQlPaymentTransport : IPaymentTransport
 
     public GraphQlPaymentTransport(TupagoClientOptions options)
     {
-        if (options is null) throw new TupagoConfigException("Options", "options required");
+        options = (options ?? throw new TupagoConfigException("Options", "options required")).Validate();
         _credentials = options.Credentials;
 
         var scheme = options.UseTls ? "https" : "http";
@@ -42,9 +42,8 @@ public sealed class GraphQlPaymentTransport : IPaymentTransport
     {
         var query = "query($id: ID!) { cliente(id: $id) { cliente { id nombre claveInstitucion key } catalogoInstitucion { id claveInstitucion nombreCorto } } }";
         var vars = new { id = request.Id.ToString() };
-        var json = await ExecuteAsync(query, vars, cancellationToken).ConfigureAwait(false);
-        using var doc = JsonDocument.Parse(json);
-        var data = doc.RootElement.GetProperty("data").GetProperty("cliente");
+        var data = await ExecuteFieldAsync(
+            "GetCliente", "cliente", query, vars, cancellationToken, isCreate: false).ConfigureAwait(false);
         var cliente = data.GetProperty("cliente");
         var catalogo = data.GetProperty("catalogoInstitucion");
         return new ClientePerfil
@@ -69,9 +68,8 @@ public sealed class GraphQlPaymentTransport : IPaymentTransport
     {
         var query = "query($clave: String!) { catalogoInstitucion(claveInstitucion: $clave) { id claveInstitucion nombreCorto } }";
         var vars = new { clave = request.ClaveInstitucion };
-        var json = await ExecuteAsync(query, vars, cancellationToken).ConfigureAwait(false);
-        using var doc = JsonDocument.Parse(json);
-        var data = doc.RootElement.GetProperty("data").GetProperty("catalogoInstitucion");
+        var data = await ExecuteFieldAsync(
+            "GetCatalogo", "catalogoInstitucion", query, vars, cancellationToken, isCreate: false).ConfigureAwait(false);
         return new CatalogoInstitucion
         {
             Id = data.GetProperty("id").GetInt64(),
@@ -85,16 +83,18 @@ public sealed class GraphQlPaymentTransport : IPaymentTransport
         // ByCuenta verified in backend3 GraphQL controller.
         var query = "query($idc: String!, $idCuenta: ID!) { pagoQrEstatusByCuenta(idc: $idc, idCuenta: $idCuenta) }";
         var vars = new { idc = request.Idc, idCuenta = request.IdCuenta.ToString() };
-        var json = await ExecuteAsync(query, vars, cancellationToken).ConfigureAwait(false);
-        return new JsonResponse { Json = json };
+        var data = await ExecuteFieldAsync(
+            "GetQrStatus", "pagoQrEstatusByCuenta", query, vars, cancellationToken, isCreate: false).ConfigureAwait(false);
+        return new JsonResponse { Json = data.GetRawText() };
     }
 
     public async Task<JsonResponse> GetTelefonicoStatusAsync(GetStatusRequest request, CancellationToken cancellationToken)
     {
         var query = "query($idc: String!, $idCuenta: ID!) { pagoTelefonicoEstatusByCuenta(idc: $idc, idCuenta: $idCuenta) }";
         var vars = new { idc = request.Idc, idCuenta = request.IdCuenta.ToString() };
-        var json = await ExecuteAsync(query, vars, cancellationToken).ConfigureAwait(false);
-        return new JsonResponse { Json = json };
+        var data = await ExecuteFieldAsync(
+            "GetTelefonicoStatus", "pagoTelefonicoEstatusByCuenta", query, vars, cancellationToken, isCreate: false).ConfigureAwait(false);
+        return new JsonResponse { Json = data.GetRawText() };
     }
 
     public async Task<JsonResponse> CreateQrAsync(CreateQrRequest request, CancellationToken cancellationToken)
@@ -115,8 +115,10 @@ public sealed class GraphQlPaymentTransport : IPaymentTransport
             },
             key = request.IdempotencyKey,
         };
-        var json = await ExecuteAsync(mutation, vars, cancellationToken).ConfigureAwait(false);
-        return new JsonResponse { Json = json };
+        var data = await ExecuteFieldAsync(
+            "CreateQr", "createPagoQr", mutation, vars, cancellationToken,
+            isCreate: true, idempotencyKey: request.IdempotencyKey).ConfigureAwait(false);
+        return new JsonResponse { Json = data.GetRawText() };
     }
 
     public async Task<JsonResponse> CreateTelefonicoAsync(CreateTelefonicoRequest request, CancellationToken cancellationToken)
@@ -135,12 +137,22 @@ public sealed class GraphQlPaymentTransport : IPaymentTransport
             },
             key = request.IdempotencyKey,
         };
-        var json = await ExecuteAsync(mutation, vars, cancellationToken).ConfigureAwait(false);
-        return new JsonResponse { Json = json };
+        var data = await ExecuteFieldAsync(
+            "CreateTelefonico", "createPagoTelefonico", mutation, vars, cancellationToken,
+            isCreate: true, idempotencyKey: request.IdempotencyKey).ConfigureAwait(false);
+        return new JsonResponse { Json = data.GetRawText() };
     }
 
-    private async Task<string> ExecuteAsync(string query, object variables, CancellationToken ct)
+    private async Task<JsonElement> ExecuteFieldAsync(
+        string operation,
+        string field,
+        string query,
+        object variables,
+        CancellationToken ct,
+        bool isCreate,
+        string idempotencyKey = "")
     {
+        ct.ThrowIfCancellationRequested();
         var payload = new { query, variables };
         using var req = new HttpRequestMessage(HttpMethod.Post, "/graphql")
         {
@@ -155,30 +167,121 @@ public sealed class GraphQlPaymentTransport : IPaymentTransport
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         }
 
-        using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
-        var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-
-        if (!resp.IsSuccessStatusCode)
-            throw new TupagoException("GraphQL", Grpc.Core.StatusCode.Unknown, $"HTTP {(int)resp.StatusCode}: {body}", false);
-
-        using var doc = JsonDocument.Parse(body);
-        if (doc.RootElement.TryGetProperty("errors", out var errors) && errors.GetArrayLength() > 0)
+        ct.ThrowIfCancellationRequested();
+        HttpResponseMessage resp;
+        try
         {
-            var first = errors[0];
-            var code = first.TryGetProperty("extensions", out var ext) && ext.TryGetProperty("code", out var c)
-                ? c.GetString()
-                : "UNKNOWN";
-            var grpcCode = code switch
-            {
-                "IDEMPOTENCY_CONFLICT" => Grpc.Core.StatusCode.AlreadyExists,
-                "PAYMENT_PENDING_RECONCILIATION" => Grpc.Core.StatusCode.Aborted,
-                "PAYMENT_LIMIT" => Grpc.Core.StatusCode.InvalidArgument,
-                _ => Grpc.Core.StatusCode.Unknown,
-            };
-            throw new TupagoException("GraphQL", grpcCode, code ?? "error", false);
+            resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (isCreate)
+        {
+            throw new TupagoUnknownOutcomeException(
+                operation, Grpc.Core.StatusCode.Unknown,
+                $"transport failure after GraphQL create dispatch: {ex.GetType().Name}", idempotencyKey);
         }
 
-        return body;
+        using (resp)
+        {
+            var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            var status = (int)resp.StatusCode;
+
+            if (isCreate && ((status >= 300 && status < 400) || status >= 500))
+                throw new TupagoUnknownOutcomeException(
+                    operation, Grpc.Core.StatusCode.Unknown,
+                    $"HTTP {status} after GraphQL create dispatch", idempotencyKey);
+
+            if (!resp.IsSuccessStatusCode)
+                throw MapHttpError(operation, status, body);
+
+            JsonDocument doc;
+            try
+            {
+                doc = JsonDocument.Parse(body);
+            }
+            catch (JsonException ex)
+            {
+                if (isCreate)
+                    throw new TupagoUnknownOutcomeException(
+                        operation, Grpc.Core.StatusCode.Unknown,
+                        "malformed GraphQL create response after dispatch", idempotencyKey);
+                throw new TupagoException(operation, Grpc.Core.StatusCode.Internal,
+                    "malformed GraphQL response", false);
+            }
+
+            using (doc)
+            {
+                if (doc.RootElement.TryGetProperty("errors", out var errors) && errors.GetArrayLength() > 0)
+                    throw MapGraphQlError(operation, errors[0], isCreate, idempotencyKey);
+
+                if (!doc.RootElement.TryGetProperty("data", out var data)
+                    || data.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined
+                    || !data.TryGetProperty(field, out var value)
+                    || value.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+                {
+                    if (isCreate)
+                        throw new TupagoUnknownOutcomeException(
+                            operation, Grpc.Core.StatusCode.Unknown,
+                            $"GraphQL create response missing data.{field} after dispatch", idempotencyKey);
+                    throw new TupagoException(operation, Grpc.Core.StatusCode.Internal,
+                        $"GraphQL response missing data.{field}", false);
+                }
+                return value.Clone();
+            }
+        }
+    }
+
+    private static TupagoException MapHttpError(string operation, int status, string body)
+    {
+        var code = status switch
+        {
+            400 => Grpc.Core.StatusCode.InvalidArgument,
+            401 => Grpc.Core.StatusCode.Unauthenticated,
+            403 => Grpc.Core.StatusCode.PermissionDenied,
+            404 => Grpc.Core.StatusCode.NotFound,
+            409 => Grpc.Core.StatusCode.AlreadyExists,
+            502 or 503 or 504 => Grpc.Core.StatusCode.Unavailable,
+            >= 500 => Grpc.Core.StatusCode.Internal,
+            _ => Grpc.Core.StatusCode.Unknown,
+        };
+        return new TupagoException(operation, code, $"HTTP {status}: {body}",
+            TuPago3.Sdk.Retry.RetryPolicy.IsRetryableRead(code));
+    }
+
+    private static TupagoException MapGraphQlError(
+        string operation, JsonElement first, bool isCreate, string idempotencyKey)
+    {
+        var code = first.TryGetProperty("extensions", out var ext)
+            && ext.TryGetProperty("code", out var c)
+            ? c.GetString() ?? "UNKNOWN"
+            : "UNKNOWN";
+        var message = first.TryGetProperty("message", out var m)
+            ? m.GetString() ?? code
+            : code;
+
+        return code switch
+        {
+            "PAYMENT_PENDING_RECONCILIATION" =>
+                new TupagoPendingReconciliationException(operation, message),
+            "IDEMPOTENCY_CONFLICT" or "ALREADY_EXISTS" =>
+                new TupagoException(operation, Grpc.Core.StatusCode.AlreadyExists, message, false),
+            "POLICY_REVISION_CONFLICT" or "FAILED_PRECONDITION" =>
+                new TupagoException(operation, Grpc.Core.StatusCode.FailedPrecondition, message, false),
+            "PAYMENT_LIMIT" or "INVALID_ARGUMENT" =>
+                new TupagoException(operation, Grpc.Core.StatusCode.InvalidArgument, message, false),
+            "UNAUTHENTICATED" =>
+                new TupagoException(operation, Grpc.Core.StatusCode.Unauthenticated, message, false),
+            "PERMISSION_DENIED" =>
+                new TupagoException(operation, Grpc.Core.StatusCode.PermissionDenied, message, false),
+            "NOT_FOUND" =>
+                new TupagoException(operation, Grpc.Core.StatusCode.NotFound, message, false),
+            _ when isCreate =>
+                new TupagoUnknownOutcomeException(
+                    operation, Grpc.Core.StatusCode.Unknown,
+                    $"ambiguous GraphQL create error after dispatch: {message}", idempotencyKey),
+            _ =>
+                new TupagoException(operation, Grpc.Core.StatusCode.Internal,
+                    $"unrecognized GraphQL error: {message}", false),
+        };
     }
 
     public ValueTask DisposeAsync()
