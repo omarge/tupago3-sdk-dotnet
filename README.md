@@ -31,6 +31,14 @@ var perfil = await client.GetClienteAsync(new GetClienteRequest { Id = 1 });
 await client.DisposeAsync();
 ```
 
+## C2 CreateTelefonico — endpoint canónico
+
+REST: `POST /api/payments/msjpagotelefonicousuario`
+
+Usa `resolveSingleOwnedCliente()` — misma autoridad que gRPC/GraphQL.
+
+**NO** usar `/msjpagotelefonico` (usa `requireOwnedClienteByKey`, autoridad diferente).
+
 ## ByCuenta en consultas de estatus
 
 El backend3 ofrece dos formas de consultar el estatus de un pago:
