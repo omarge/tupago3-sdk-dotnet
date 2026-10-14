@@ -185,7 +185,7 @@ public sealed class RestPaymentTransport : IPaymentTransport
             throw new TupagoException("REST", Grpc.Core.StatusCode.Aborted, $"HTTP 202 PendingReconciliation: {body}", false);
         // CREATE: 502/503/504 after dispatch = UnknownOutcome (not retryable).
         if (isCreate && status is 502 or 503 or 504)
-            throw new TupagoUnknownOutcomeException("REST", $"HTTP {status} after create dispatch: {body}");
+            throw new TupagoUnknownOutcomeException("REST", Grpc.Core.StatusCode.Unknown, $"HTTP {status} after create dispatch", "");
         if (resp.IsSuccessStatusCode) return body;
 
         var code = resp.StatusCode switch
