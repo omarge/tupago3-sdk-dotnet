@@ -13,8 +13,20 @@ namespace TuPago3.Sdk.Models;
 public static class Money
 {
     /// <summary>
-    /// Validates a double monto: rejects NaN, Infinity and non-positive values.
-    /// Does not enforce commercial min/max (those are backend policy).
+    /// Smallest representable, non-lossy monetary magnitude (one centavo). Values below this are
+    /// unsafe for financial amounts and are rejected.
+    /// </summary>
+    public const double MinMonto = 0.01;
+
+    /// <summary>
+    /// Largest accepted monetary magnitude. Values at or above this are rejected as unsafe.
+    /// The backend remains the authority for commercial limits; this is a fail-closed safety bound.
+    /// </summary>
+    public const double MaxMonto = 1_000_000_000.0;
+
+    /// <summary>
+    /// Validates a double monto: rejects NaN, Infinity, non-positive, sub-cent and oversized values.
+    /// The backend remains the authority for commercial limits; these are fail-closed safety bounds.
     /// </summary>
     public static void Validate(double monto)
     {
@@ -22,6 +34,8 @@ public static class Money
         if (double.IsPositiveInfinity(monto) || double.IsNegativeInfinity(monto))
             throw new TupagoConfigException("Monto", "monto is Infinite");
         if (monto <= 0) throw new TupagoConfigException("Monto", "monto must be strictly positive");
+        if (monto < MinMonto) throw new TupagoConfigException("Monto", $"monto must be at least {MinMonto}");
+        if (monto >= MaxMonto) throw new TupagoConfigException("Monto", $"monto must be below {MaxMonto}");
     }
 
     /// <summary>

@@ -4,6 +4,7 @@ using System.Text.Json;
 using TuPago3.Sdk.Authentication;
 using TuPago3.Sdk.Client;
 using TuPago3.Sdk.Errors;
+using TuPago3.Sdk.Security;
 using TuPago3.Sdk.Generated.V1;
 
 namespace TuPago3.Sdk.Transport;
@@ -28,6 +29,8 @@ public sealed class GraphQlPaymentTransport : IPaymentTransport
         var baseAddress = $"{scheme}://{options.Target}";
 
         var handler = new SocketsHttpHandler { AllowAutoRedirect = false };
+        if (options.UseTls)
+            handler.SslOptions = TlsPolicy.BuildSslOptions(options.CaCertificatePem, options.ServerName);
         _http = new HttpClient(handler)
         {
             BaseAddress = new Uri(baseAddress),

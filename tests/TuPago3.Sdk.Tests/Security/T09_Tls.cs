@@ -27,7 +27,7 @@ public class T09_RemoteTlsRequired
     public void LoopbackPlaintextPermitted()
     {
         var ex = Record.Exception(() =>
-            new TupagoPaymentClient(new TupagoClientOptions { Target = "127.0.0.1:9090", UseTls = false }));
+            new TupagoPaymentClient(new TupagoClientOptions { Target = "127.0.0.1:9090", UseTls = false, AllowUnauthenticatedLab = true }));
         Assert.Null(ex);
     }
 
@@ -44,7 +44,7 @@ public class T09_RemoteTlsRequired
     {
         // "localhost" resolves to a loopback address; plaintext is permitted for it.
         var ex = Record.Exception(() =>
-            new TupagoPaymentClient(new TupagoClientOptions { Target = "localhost:9090", UseTls = false }));
+            new TupagoPaymentClient(new TupagoClientOptions { Target = "localhost:9090", UseTls = false, AllowUnauthenticatedLab = true }));
         Assert.Null(ex);
     }
 

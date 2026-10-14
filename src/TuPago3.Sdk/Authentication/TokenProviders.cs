@@ -18,11 +18,13 @@ public sealed class StaticTokenProvider : ITokenProvider
 {
     private readonly string _token;
 
+    /// <summary>
+    /// Stores a fixed token. Construction never fails on a blank token; the blank/empty token is
+    /// rejected fail-closed at dispatch time by the gRPC interceptor and REST/GraphQL transports.
+    /// </summary>
     public StaticTokenProvider(string token)
     {
-        if (string.IsNullOrWhiteSpace(token))
-            throw new TupagoConfigException("Credentials", "token must not be empty");
-        _token = token;
+        _token = token ?? "";
     }
 
     public Task<string> GetTokenAsync(CancellationToken cancellationToken = default) => Task.FromResult(_token);

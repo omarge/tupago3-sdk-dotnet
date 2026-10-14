@@ -132,14 +132,27 @@ public static class TlsPolicy
             if (ext.Oid?.Value == "2.5.29.17")
                 sanExt = new X509SubjectAlternativeNameExtension(ext.RawData, false);
 
+        // Yields the SAN value portion (after the label separator) for every entry. The SAN
+        // extension string format varies across runtimes: some use "DNS Name=localhost" (one per
+        // line) and others "DNS:localhost, IP Address:127.0.0.1" (comma/colon delimited). Handle
+        // both '=' and ':' separators and both ',' and '\n' delimiters.
+        static IEnumerable<string> SanValues(string formatted)
+        {
+            foreach (var part in formatted.Replace("\r", "").Split(new[] { '\n', ',' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var p = part.Trim();
+                var eq = p.IndexOf('=');
+                var colon = p.IndexOf(':');
+                var sep = eq >= 0 && (colon < 0 || eq < colon) ? eq : colon;
+                if (sep < 0) continue;
+                yield return p[(sep + 1)..].Trim();
+            }
+        }
+
         if (sanExt is not null)
         {
-            var formatted = sanExt.Format(false);
-            foreach (var line in formatted.Split('\n'))
+            foreach (var value in SanValues(sanExt.Format(true)))
             {
-                var eq = line.IndexOf('=');
-                if (eq < 0) continue;
-                var value = line[(eq + 1)..].Trim();
                 if (string.Equals(value, host, StringComparison.OrdinalIgnoreCase)) return true;
                 // Wildcard: *.example.com matches foo.example.com but not a.b.example.com
                 if (value.StartsWith("*.", StringComparison.Ordinal))
