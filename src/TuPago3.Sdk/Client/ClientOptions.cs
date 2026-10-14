@@ -17,7 +17,7 @@ public sealed class TupagoClientOptions
     public string Target { get; init; } = "";
 
     /// <summary>
-    /// Preferred transport. Currently only Grpc is fully implemented.
+    /// Preferred transport. gRPC, REST and GraphQL implement the canonical C1-C6 payment surface.
     /// </summary>
     public TransportKind Transport { get; init; } = TransportKind.Grpc;
 
