@@ -140,6 +140,37 @@ public sealed class T32_HttpFinancialSemantics
     }
 
     [Fact]
+    public async Task GraphQl_GetCliente_AcceptsCanonicalStringIds_AndMapsProfile()
+    {
+        using var server = new LocalServer(_ =>
+            (200, "{\"data\":{\"cliente\":{\"cliente\":{\"id\":\"123\",\"nombre\":\"Juan\",\"claveInstitucion\":\"001\",\"key\":\"k\"},\"catalogoInstitucion\":{\"id\":\"9\",\"claveInstitucion\":\"001\",\"nombreCorto\":\"Banco\"}}}}"));
+        await using var transport = new GraphQlPaymentTransport(Options(server.Port, TransportKind.GraphQl));
+
+        var result = await transport.GetClienteAsync(
+            new GetClienteRequest { Id = 123 }, CancellationToken.None);
+
+        Assert.Equal(123, result.Cliente.Id);
+        Assert.Equal("Juan", result.Cliente.Nombre);
+        Assert.Equal("001", result.Cliente.ClaveInstitucion);
+        Assert.Equal(9, result.CatalogoInstitucion.Id);
+        Assert.Equal("Banco", result.CatalogoInstitucion.NombreCorto);
+    }
+
+    [Fact]
+    public async Task GraphQl_GetCatalogo_BlankRequiredField_FailsClosed()
+    {
+        using var server = new LocalServer(_ =>
+            (200, "{\"data\":{\"catalogoInstitucion\":{\"id\":\"9\",\"claveInstitucion\":\"001\",\"nombreCorto\":\"\"}}}"));
+        await using var transport = new GraphQlPaymentTransport(Options(server.Port, TransportKind.GraphQl));
+
+        var ex = await Assert.ThrowsAsync<TupagoException>(() =>
+            transport.GetCatalogoAsync(
+                new GetCatalogoRequest { ClaveInstitucion = "001" }, CancellationToken.None));
+
+        Assert.Equal(Grpc.Core.StatusCode.Internal, ex.GrpcCode);
+    }
+
+    [Fact]
     public async Task GraphQl_Status_ReturnsCanonicalLeaf_NotEnvelope()
     {
         using var server = new LocalServer(_ =>
