@@ -43,21 +43,39 @@ public sealed class RestPaymentTransport : IPaymentTransport
 
     public async Task<ClientePerfil> GetClienteAsync(GetClienteRequest request, CancellationToken cancellationToken)
     {
-        // GET /api/clientes/{id} + catalog composition is required by program law.
-        // Simplified here to the direct cliente call; full composition is a follow-up.
+        // C5: GET /api/clientes/{id} + catalog composition required by program law.
         var json = await GetAsync($"/api/clientes/{request.Id}", cancellationToken).ConfigureAwait(false);
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
-        return new ClientePerfil
+        var clave = root.TryGetProperty("claveInstitucion", out var c) ? c.GetString() ?? "" : "";
+        var perfil = new ClientePerfil
         {
             Cliente = new Cliente
             {
                 Id = root.TryGetProperty("id", out var id) ? id.GetInt64() : request.Id,
                 Nombre = root.TryGetProperty("nombre", out var n) ? n.GetString() ?? "" : "",
-                ClaveInstitucion = root.TryGetProperty("claveInstitucion", out var c) ? c.GetString() ?? "" : "",
+                ClaveInstitucion = clave,
                 Key = root.TryGetProperty("key", out var k) ? k.GetString() ?? "" : "",
             }
         };
+        // Compose catalog if clave is present.
+        if (!string.IsNullOrEmpty(clave))
+        {
+            try
+            {
+                var catJson = await GetAsync($"/api/catalogo-institucions/clave/{Uri.EscapeDataString(clave)}", cancellationToken).ConfigureAwait(false);
+                using var catDoc = JsonDocument.Parse(catJson);
+                var catRoot = catDoc.RootElement;
+                perfil.CatalogoInstitucion = new CatalogoInstitucion
+                {
+                    Id = catRoot.TryGetProperty("id", out var cid) ? cid.GetInt64() : 0,
+                    ClaveInstitucion = catRoot.TryGetProperty("claveInstitucion", out var cc) ? cc.GetString() ?? clave : clave,
+                    NombreCorto = catRoot.TryGetProperty("nombreCorto", out var cn) ? cn.GetString() ?? "" : "",
+                };
+            }
+            catch { /* catalog composition is best-effort; caller can query separately */ }
+        }
+        return perfil;
     }
 
     public async Task<CatalogoInstitucion> GetCatalogoAsync(GetCatalogoRequest request, CancellationToken cancellationToken)
@@ -75,7 +93,7 @@ public sealed class RestPaymentTransport : IPaymentTransport
 
     public async Task<JsonResponse> GetQrStatusAsync(GetStatusRequest request, CancellationToken cancellationToken)
     {
-        // BY-CUENTA route verified: POST /api/payments/estatusmsjqr
+        // C3 ByCuenta: POST /api/payments/estatusmsjqr
         var body = new { idc = request.Idc, idCuenta = request.IdCuenta };
         var json = await PostAsync("/api/payments/estatusmsjqr", body, null, cancellationToken).ConfigureAwait(false);
         return new JsonResponse { Json = json };
@@ -83,15 +101,16 @@ public sealed class RestPaymentTransport : IPaymentTransport
 
     public async Task<JsonResponse> GetTelefonicoStatusAsync(GetStatusRequest request, CancellationToken cancellationToken)
     {
-        // Expected BY-CUENTA route (verify exact path if it differs).
-        var body = new { idc = request.Idc, idCuenta = request.IdCuenta };
+        // C4 ByCuenta: POST /api/payments/estatusmsjcobrotelefonico
+        // Body uses idMsjdeCobro (NOT idc) per backend3 DTO.
+        var body = new { idCuenta = request.IdCuenta, idMsjdeCobro = request.Idc };
         var json = await PostAsync("/api/payments/estatusmsjcobrotelefonico", body, null, cancellationToken).ConfigureAwait(false);
         return new JsonResponse { Json = json };
     }
 
     public async Task<JsonResponse> CreateQrAsync(CreateQrRequest request, CancellationToken cancellationToken)
     {
-        // Verified: POST /api/payments/msjpagoqrusuario + Idempotency-Key.
+        // C1: POST /api/payments/msjpagoqrusuario + Idempotency-Key.
         // Response wraps result under "mensaje".
         var body = new
         {
@@ -105,7 +124,6 @@ public sealed class RestPaymentTransport : IPaymentTransport
             vigencia = request.Vigencia,
         };
         var json = await PostAsync("/api/payments/msjpagoqrusuario", body, request.IdempotencyKey, cancellationToken).ConfigureAwait(false);
-        // Unwrap mensaje if present so the public shape matches gRPC JsonResponse.
         using var doc = JsonDocument.Parse(json);
         if (doc.RootElement.TryGetProperty("mensaje", out var mensaje))
             return new JsonResponse { Json = mensaje.GetRawText() };
@@ -114,7 +132,9 @@ public sealed class RestPaymentTransport : IPaymentTransport
 
     public async Task<JsonResponse> CreateTelefonicoAsync(CreateTelefonicoRequest request, CancellationToken cancellationToken)
     {
-        // Verified route: POST /api/payments/msjpagotelefonico (uses key).
+        // C2 CANONICAL PEER: POST /api/payments/msjpagotelefonicousuario
+        // Uses resolveSingleOwnedCliente() — same authority as gRPC/GraphQL.
+        // NOT /msjpagotelefonico (that uses requireOwnedClienteByKey).
         var body = new
         {
             key = request.Key,
@@ -124,7 +144,7 @@ public sealed class RestPaymentTransport : IPaymentTransport
             numeroCelular = request.NumeroCelular,
             vigencia = request.Vigencia,
         };
-        var json = await PostAsync("/api/payments/msjpagotelefonico", body, request.IdempotencyKey, cancellationToken).ConfigureAwait(false);
+        var json = await PostAsync("/api/payments/msjpagotelefonicousuario", body, request.IdempotencyKey, cancellationToken).ConfigureAwait(false);
         return new JsonResponse { Json = json };
     }
 
@@ -159,10 +179,11 @@ public sealed class RestPaymentTransport : IPaymentTransport
     private static async Task<string> ReadResponseAsync(HttpResponseMessage resp)
     {
         var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
+        // Handle 202 PendingReconciliation BEFORE treating as success.
+        if ((int)resp.StatusCode == 202)
+            throw new TupagoException("REST", Grpc.Core.StatusCode.Aborted, $"HTTP 202 PendingReconciliation: {body}", false);
         if (resp.IsSuccessStatusCode) return body;
 
-        // Map common statuses. Creates that may have been committed should become UnknownOutcome
-        // in a fuller implementation; this is a conservative first cut.
         var code = resp.StatusCode switch
         {
             System.Net.HttpStatusCode.Unauthorized => Grpc.Core.StatusCode.Unauthenticated,
@@ -170,7 +191,6 @@ public sealed class RestPaymentTransport : IPaymentTransport
             System.Net.HttpStatusCode.NotFound => Grpc.Core.StatusCode.NotFound,
             System.Net.HttpStatusCode.Conflict => Grpc.Core.StatusCode.AlreadyExists,
             System.Net.HttpStatusCode.BadRequest => Grpc.Core.StatusCode.InvalidArgument,
-            System.Net.HttpStatusCode.Accepted => Grpc.Core.StatusCode.Aborted, // pending reconciliation candidate
             _ => Grpc.Core.StatusCode.Unknown,
         };
         throw new TupagoException("REST", code, $"HTTP {(int)resp.StatusCode}: {body}", false);
