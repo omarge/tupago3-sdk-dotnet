@@ -28,6 +28,8 @@ public static class ClientFactory
             ServerName = serverName,
             Credentials = token is null ? null : new StaticTokenProvider(token),
             DefaultDeadline = deadline ?? TimeSpan.FromSeconds(30),
+            // Lab tests without credentials opt into explicit unauthenticated mode.
+            AllowUnauthenticatedLab = token is null,
         });
     }
 
