@@ -124,10 +124,18 @@ public sealed class RestPaymentTransport : IPaymentTransport
             vigencia = request.Vigencia,
         };
         var json = await PostAsync("/api/payments/msjpagoqrusuario", body, request.IdempotencyKey, cancellationToken, isCreate: true).ConfigureAwait(false);
-        using var doc = JsonDocument.Parse(json);
-        if (doc.RootElement.TryGetProperty("mensaje", out var mensaje))
-            return new JsonResponse { Json = mensaje.GetRawText() };
-        return new JsonResponse { Json = json };
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("mensaje", out var mensaje))
+                return new JsonResponse { Json = mensaje.GetRawText() };
+            return new JsonResponse { Json = json };
+        }
+        catch (JsonException)
+        {
+            // Malformed 2xx after create dispatch = UnknownOutcome.
+            throw new TupagoUnknownOutcomeException("CreateQr", Grpc.Core.StatusCode.Unknown, "malformed create response after dispatch", request.IdempotencyKey);
+        }
     }
 
     public async Task<JsonResponse> CreateTelefonicoAsync(CreateTelefonicoRequest request, CancellationToken cancellationToken)
