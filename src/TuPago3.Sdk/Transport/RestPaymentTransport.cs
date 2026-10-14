@@ -23,24 +23,24 @@ public sealed class RestPaymentTransport : IPaymentTransport
 
     public RestPaymentTransport(TupagoClientOptions options)
     {
-        _options = options ?? throw new TupagoConfigException("Options", "options required");
-        _credentials = options.Credentials;
+        _options = (options ?? throw new TupagoConfigException("Options", "options required")).Validate();
+        _credentials = _options.Credentials;
 
-        var scheme = options.UseTls ? "https" : "http";
-        var baseAddress = $"{scheme}://{options.Target}";
+        var scheme = _options.UseTls ? "https" : "http";
+        var baseAddress = $"{scheme}://{_options.Target}";
 
         var handler = new SocketsHttpHandler
         {
             AllowAutoRedirect = false,
             EnableMultipleHttp2Connections = true,
         };
-        if (options.UseTls)
-            handler.SslOptions = TlsPolicy.BuildSslOptions(options.CaCertificatePem, options.ServerName);
+        if (_options.UseTls)
+            handler.SslOptions = TlsPolicy.BuildSslOptions(_options.CaCertificatePem, _options.ServerName);
 
         _http = new HttpClient(handler)
         {
             BaseAddress = new Uri(baseAddress),
-            Timeout = options.DefaultDeadline > TimeSpan.Zero ? options.DefaultDeadline : Timeout.InfiniteTimeSpan,
+            Timeout = _options.DefaultDeadline > TimeSpan.Zero ? _options.DefaultDeadline : Timeout.InfiniteTimeSpan,
         };
     }
 
@@ -85,11 +85,21 @@ public sealed class RestPaymentTransport : IPaymentTransport
         var json = await GetAsync($"/api/catalogo-institucions/clave/{Uri.EscapeDataString(request.ClaveInstitucion)}", cancellationToken).ConfigureAwait(false);
         using var doc = JsonDocument.Parse(json);
         var root = doc.RootElement;
+        if (!root.TryGetProperty("id", out var idEl)
+            || !root.TryGetProperty("claveInstitucion", out var claveEl)
+            || !root.TryGetProperty("nombreCorto", out var nombreEl))
+            throw new TupagoException("GetCatalogo", Grpc.Core.StatusCode.Internal,
+                "malformed catalogo response: missing required fields", false);
+        var clave = claveEl.GetString();
+        var nombre = nombreEl.GetString();
+        if (idEl.GetInt64() == 0 || string.IsNullOrWhiteSpace(clave) || string.IsNullOrWhiteSpace(nombre))
+            throw new TupagoException("GetCatalogo", Grpc.Core.StatusCode.Internal,
+                "malformed catalogo response: default/blank required fields", false);
         return new CatalogoInstitucion
         {
-            Id = root.TryGetProperty("id", out var id) ? id.GetInt64() : 0,
-            ClaveInstitucion = root.TryGetProperty("claveInstitucion", out var c) ? c.GetString() ?? request.ClaveInstitucion : request.ClaveInstitucion,
-            NombreCorto = root.TryGetProperty("nombreCorto", out var n) ? n.GetString() ?? "" : "",
+            Id = idEl.GetInt64(),
+            ClaveInstitucion = clave,
+            NombreCorto = nombre,
         };
     }
 
@@ -97,7 +107,7 @@ public sealed class RestPaymentTransport : IPaymentTransport
     {
         // C3 ByCuenta: POST /api/payments/estatusmsjqr
         var body = new { idc = request.Idc, idCuenta = request.IdCuenta };
-        var json = await PostAsync("/api/payments/estatusmsjqr", body, null, cancellationToken).ConfigureAwait(false);
+        var json = await PostAsync("/api/payments/estatusmsjqr", body, null, cancellationToken, operation: "GetQrStatus").ConfigureAwait(false);
         return new JsonResponse { Json = json };
     }
 
@@ -106,7 +116,7 @@ public sealed class RestPaymentTransport : IPaymentTransport
         // C4 ByCuenta: POST /api/payments/estatusmsjcobrotelefonico
         // Body uses idMsjdeCobro (NOT idc) per backend3 DTO.
         var body = new { idCuenta = request.IdCuenta, idMsjdeCobro = request.Idc };
-        var json = await PostAsync("/api/payments/estatusmsjcobrotelefonico", body, null, cancellationToken).ConfigureAwait(false);
+        var json = await PostAsync("/api/payments/estatusmsjcobrotelefonico", body, null, cancellationToken, operation: "GetTelefonicoStatus").ConfigureAwait(false);
         return new JsonResponse { Json = json };
     }
 
@@ -125,13 +135,16 @@ public sealed class RestPaymentTransport : IPaymentTransport
             tipoPago = request.TipoPago,
             vigencia = request.Vigencia,
         };
-        var json = await PostAsync("/api/payments/msjpagoqrusuario", body, request.IdempotencyKey, cancellationToken, isCreate: true).ConfigureAwait(false);
+        var json = await PostAsync("/api/payments/msjpagoqrusuario", body, request.IdempotencyKey, cancellationToken,
+            isCreate: true, operation: "CreateQr").ConfigureAwait(false);
         try
         {
             using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.TryGetProperty("mensaje", out var mensaje))
-                return new JsonResponse { Json = mensaje.GetRawText() };
-            return new JsonResponse { Json = json };
+            if (!doc.RootElement.TryGetProperty("mensaje", out var mensaje)
+                || mensaje.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
+                throw new TupagoUnknownOutcomeException("CreateQr", Grpc.Core.StatusCode.Unknown,
+                    "create response missing mensaje after dispatch", request.IdempotencyKey);
+            return new JsonResponse { Json = mensaje.GetRawText() };
         }
         catch (JsonException)
         {
@@ -154,7 +167,8 @@ public sealed class RestPaymentTransport : IPaymentTransport
             numeroCelular = request.NumeroCelular,
             vigencia = request.Vigencia,
         };
-        var json = await PostAsync("/api/payments/msjpagotelefonicousuario", body, request.IdempotencyKey, cancellationToken, isCreate: true).ConfigureAwait(false);
+        var json = await PostAsync("/api/payments/msjpagotelefonicousuario", body, request.IdempotencyKey, cancellationToken,
+            isCreate: true, operation: "CreateTelefonico").ConfigureAwait(false);
         return new JsonResponse { Json = json };
     }
 
@@ -166,15 +180,32 @@ public sealed class RestPaymentTransport : IPaymentTransport
         return await ReadResponseAsync(resp, isCreate: false).ConfigureAwait(false);
     }
 
-    private async Task<string> PostAsync(string path, object body, string? idempotencyKey, CancellationToken ct, bool isCreate = false)
+    private async Task<string> PostAsync(
+        string path, object body, string? idempotencyKey, CancellationToken ct,
+        bool isCreate = false, string operation = "REST")
     {
+        ct.ThrowIfCancellationRequested();
         using var req = new HttpRequestMessage(HttpMethod.Post, path);
         req.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
         if (!string.IsNullOrEmpty(idempotencyKey))
             req.Headers.TryAddWithoutValidation("Idempotency-Key", idempotencyKey);
         await AddAuthAsync(req, ct).ConfigureAwait(false);
-        using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
-        return await ReadResponseAsync(resp, isCreate).ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+        try
+        {
+            using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
+            return await ReadResponseAsync(resp, isCreate, operation, idempotencyKey ?? "").ConfigureAwait(false);
+        }
+        catch (TupagoException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (isCreate)
+        {
+            throw new TupagoUnknownOutcomeException(
+                operation, Grpc.Core.StatusCode.Unknown,
+                $"transport failure after create dispatch: {ex.GetType().Name}", idempotencyKey ?? "");
+        }
     }
 
     private async Task AddAuthAsync(HttpRequestMessage req, CancellationToken ct)
@@ -186,16 +217,18 @@ public sealed class RestPaymentTransport : IPaymentTransport
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
     }
 
-    private static async Task<string> ReadResponseAsync(HttpResponseMessage resp, bool isCreate = false)
+    private static async Task<string> ReadResponseAsync(
+        HttpResponseMessage resp, bool isCreate = false, string operation = "REST", string idempotencyKey = "")
     {
         var body = await resp.Content.ReadAsStringAsync().ConfigureAwait(false);
         var status = (int)resp.StatusCode;
-        // Handle 202 PendingReconciliation BEFORE treating as success.
+        // Handle 202 PendingReconciliation BEFORE treating as generic success.
         if (status == 202)
-            throw new TupagoException("REST", Grpc.Core.StatusCode.Aborted, $"HTTP 202 PendingReconciliation: {body}", false);
-        // CREATE: 502/503/504 after dispatch = UnknownOutcome (not retryable).
-        if (isCreate && status is 502 or 503 or 504)
-            throw new TupagoUnknownOutcomeException("REST", Grpc.Core.StatusCode.Unknown, $"HTTP {status} after create dispatch", "");
+            throw new TupagoPendingReconciliationException(operation, $"HTTP 202 PendingReconciliation: {body}");
+        // A redirect or server-side 5xx after a financial POST is ambiguous. Never auto-follow/resubmit.
+        if (isCreate && ((status >= 300 && status < 400) || status >= 500))
+            throw new TupagoUnknownOutcomeException(
+                operation, Grpc.Core.StatusCode.Unknown, $"HTTP {status} after create dispatch", idempotencyKey);
         if (resp.IsSuccessStatusCode) return body;
 
         var code = resp.StatusCode switch

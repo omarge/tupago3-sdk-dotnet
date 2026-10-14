@@ -18,8 +18,8 @@ public interface IPaymentTransport : IAsyncDisposable
 }
 
 /// <summary>
-/// Marker for the preferred transport. gRPC is the current fully implemented path.
-/// REST and GraphQL are stubs pending verified backend3 wire contracts.
+/// Marker for the preferred transport. gRPC, REST and GraphQL implement the same six
+/// backend3 capabilities and must preserve equivalent public semantics.
 /// </summary>
 public enum TransportKind
 {
