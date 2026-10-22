@@ -89,6 +89,15 @@ public sealed class T32_HttpFinancialSemantics
         IdempotencyKey = "idem-test",
     };
 
+    private static CreateTelefonicoRequest Telefonico() => new()
+    {
+        Key = "cliente-key",
+        Monto = 10,
+        Concepto = "test",
+        NumeroCelular = "5512345678",
+        IdempotencyKey = "idem-telefonico",
+    };
+
     [Fact]
     public void DirectHttpTransports_ValidateRemotePlaintext()
     {
@@ -218,6 +227,64 @@ public sealed class T32_HttpFinancialSemantics
 
         await Assert.ThrowsAsync<TupagoUnknownOutcomeException>(() =>
             transport.CreateQrAsync(Qr(), CancellationToken.None));
+
+        Assert.Equal(1, server.Count);
+    }
+
+    [Theory]
+    [InlineData(TransportKind.Rest)]
+    [InlineData(TransportKind.GraphQl)]
+    public async Task CreateTelefonico503_IsUnknownOutcome_OneAttempt_AndPreservesContract(TransportKind kind)
+    {
+        string? path = null;
+        string? body = null;
+        string? idempotencyHeader = null;
+        using var server = new LocalServer(request =>
+        {
+            path = request.Url?.AbsolutePath;
+            idempotencyHeader = request.Headers["Idempotency-Key"];
+            using var reader = new StreamReader(request.InputStream);
+            body = reader.ReadToEnd();
+            return (503, "{\"message\":\"down\"}");
+        });
+        await using IPaymentTransport transport = kind == TransportKind.Rest
+            ? new RestPaymentTransport(Options(server.Port, kind))
+            : new GraphQlPaymentTransport(Options(server.Port, kind));
+
+        var ex = await Assert.ThrowsAsync<TupagoUnknownOutcomeException>(() =>
+            transport.CreateTelefonicoAsync(Telefonico(), CancellationToken.None));
+
+        Assert.Equal("idem-telefonico", ex.IdempotencyKey);
+        Assert.Equal(1, server.Count);
+        if (kind == TransportKind.Rest)
+        {
+            Assert.Equal("/api/payments/msjpagotelefonicousuario", path);
+            Assert.Equal("idem-telefonico", idempotencyHeader);
+            Assert.Contains("\"numeroCelular\":\"5512345678\"", body);
+        }
+        else
+        {
+            Assert.Equal("/graphql", path);
+            Assert.Null(idempotencyHeader);
+            Assert.Contains("createPagoTelefonico", body);
+            Assert.Contains("\"key\":\"idem-telefonico\"", body);
+        }
+    }
+
+    [Theory]
+    [InlineData(TransportKind.Rest)]
+    [InlineData(TransportKind.GraphQl)]
+    public async Task CreateTelefonicoPending_IsTyped_AndSingleAttempt(TransportKind kind)
+    {
+        using var server = new LocalServer(_ => kind == TransportKind.Rest
+            ? (202, "{\"type\":\"payment-pending-reconciliation\"}")
+            : (200, "{\"errors\":[{\"message\":\"pending\",\"extensions\":{\"code\":\"PAYMENT_PENDING_RECONCILIATION\"}}]}"));
+        await using IPaymentTransport transport = kind == TransportKind.Rest
+            ? new RestPaymentTransport(Options(server.Port, kind))
+            : new GraphQlPaymentTransport(Options(server.Port, kind));
+
+        await Assert.ThrowsAsync<TupagoPendingReconciliationException>(() =>
+            transport.CreateTelefonicoAsync(Telefonico(), CancellationToken.None));
 
         Assert.Equal(1, server.Count);
     }
